@@ -47,13 +47,17 @@ function readJson(key, fallback) {
 
 function toLocalUser(userData) {
 
+  const email =
+    userData.email?.trim().toLowerCase() ||
+    "";
+
   return {
     id: userData.uid || userData.id || Date.now(),
     displayName:
       userData.displayName ||
-      userData.email?.split("@")[0] ||
+      email.split("@")[0] ||
       "User",
-    email: userData.email,
+    email,
   };
 }
 
@@ -228,99 +232,72 @@ export function AuthProvider({
         );
       }
 
-      try {
-
-        const credential =
-          await createUserWithEmailAndPassword(
-            auth,
-            cleanEmail,
-            password
-          );
-
-        await updateProfile(
-          credential.user,
-          {
-            displayName: cleanName,
-          }
-        );
-
-        const currentUser =
-          saveLocalUser(
-            {
-              uid: credential.user.uid,
-              displayName: cleanName,
-              email: cleanEmail,
-            },
-            password
-          );
-
-        setUser(currentUser);
-
-        return;
-
-      } catch (firebaseError) {
-
-        if (
-          firebaseError.code ===
-          "auth/email-already-in-use"
-        ) {
-
-          throw new Error(
-            "User already registered"
-          );
-        }
-
-        const users =
-          readJson(
-            USERS_KEY,
-            []
-          );
-
-        const exists =
-          users.some(
-            (savedUser) =>
-              savedUser.email === cleanEmail
-          );
-
-        if (exists) {
-
-          throw new Error(
-            firebaseError.message ||
-            "User already registered"
-          );
-        }
-
-        const savedUser = {
-          id: Date.now(),
-          displayName: cleanName,
-          email: cleanEmail,
-          password,
-          createdAt: new Date().toISOString(),
-        };
-
-        const nextUsers = [
-          ...users,
-          savedUser,
-        ];
-
-        localStorage.setItem(
+      const users =
+        readJson(
           USERS_KEY,
-          JSON.stringify(nextUsers)
+          []
         );
 
-        const currentUser = {
-          id: savedUser.id,
-          displayName: savedUser.displayName,
-          email: savedUser.email,
-        };
-
-        localStorage.setItem(
-          CURRENT_USER_KEY,
-          JSON.stringify(currentUser)
+      const exists =
+        users.some(
+          (savedUser) =>
+            savedUser.email === cleanEmail
         );
 
-        setUser(currentUser);
+      if (exists) {
+
+        throw new Error(
+          "User already registered"
+        );
       }
+
+      const localUser = {
+        id: Date.now(),
+        displayName: cleanName,
+        email: cleanEmail,
+      };
+
+      const currentUser =
+        saveLocalUser(
+          localUser,
+          password
+        );
+
+      setUser(currentUser);
+
+      createUserWithEmailAndPassword(
+        auth,
+        cleanEmail,
+        password
+      )
+        .then(async (credential) => {
+
+          await updateProfile(
+            credential.user,
+            {
+              displayName: cleanName,
+            }
+          );
+
+          const firebaseUser =
+            saveLocalUser(
+              {
+                uid: credential.user.uid,
+                displayName: cleanName,
+                email: cleanEmail,
+              },
+              password
+            );
+
+          setUser(firebaseUser);
+        })
+        .catch((firebaseError) => {
+
+          console.warn(
+            "Firebase signup sync failed",
+            firebaseError
+          );
+        });
     };
 
   const login =
@@ -329,49 +306,63 @@ export function AuthProvider({
       const cleanEmail =
         email.trim().toLowerCase();
 
-      try {
+      if (!cleanEmail) {
 
-        const credential =
-          await signInWithEmailAndPassword(
-            auth,
-            cleanEmail,
-            password
-          );
-
-        const currentUser =
-          saveLocalUser(
-            credential.user,
-            password
-          );
-
-        setUser(currentUser);
-
-        return;
-
-      } catch (firebaseError) {
-
-        const savedUser =
-          findLocalUser(
-            cleanEmail,
-            password
-          );
-
-        if (!savedUser) {
-
-          throw new Error(
-            firebaseError.message ||
-            "Invalid email or password"
-          );
-        }
-
-        const currentUser =
-          saveLocalUser(
-            savedUser,
-            password
-          );
-
-        setUser(currentUser);
+        throw new Error(
+          "Please enter your email"
+        );
       }
+
+      if (!password) {
+
+        throw new Error(
+          "Please enter your password"
+        );
+      }
+
+      const savedUser =
+        findLocalUser(
+          cleanEmail,
+          password
+        );
+
+      if (!savedUser) {
+
+        throw new Error(
+          "No local account found. Please signup first."
+        );
+      }
+
+      const currentUser =
+        saveLocalUser(
+          savedUser,
+          password
+        );
+
+      setUser(currentUser);
+
+      signInWithEmailAndPassword(
+        auth,
+        cleanEmail,
+        password
+      )
+        .then((credential) => {
+
+          const firebaseUser =
+            saveLocalUser(
+              credential.user,
+              password
+            );
+
+          setUser(firebaseUser);
+        })
+        .catch((firebaseError) => {
+
+          console.warn(
+            "Firebase login sync failed",
+            firebaseError
+          );
+        });
     };
 
   const loginWithGoogle =

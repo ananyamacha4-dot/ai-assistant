@@ -4,6 +4,10 @@ from "react-router-dom";
 import { useState }
 from "react";
 
+import {
+  API_BASE_URL
+} from "../config";
+
 import "../index.css";
 
 export default function Interpreter() {
@@ -31,7 +35,7 @@ export default function Interpreter() {
       setLoading(true);
 
       const response = await fetch(
-        "http://127.0.0.1:8001/run-python",
+        `${API_BASE_URL}/run-python`,
         {
 
           method: "POST",

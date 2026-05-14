@@ -11,6 +11,10 @@ import {
   useAuth
 } from "./components/AuthProvider";
 
+import {
+  API_BASE_URL
+} from "./config";
+
 import { Prism as SyntaxHighlighter }
 from "react-syntax-highlighter";
 
@@ -245,7 +249,7 @@ const sendEmail =
       const response =
         await fetch(
 
-          "http://127.0.0.1:8001/send-email",
+          `${API_BASE_URL}/send-email`,
 
           {
 
@@ -332,7 +336,7 @@ const sendEmail =
     try {
 
       const response = await fetch(
-        "http://127.0.0.1:8001/chat",
+        `${API_BASE_URL}/chat`,
         {
 
           method: "POST",
@@ -442,7 +446,7 @@ const uploadPDF =
       const response =
         await fetch(
 
-          "http://127.0.0.1:8001/upload-pdf",
+          `${API_BASE_URL}/upload-pdf`,
 
           {
 
@@ -584,12 +588,8 @@ const uploadPDF =
           <h1>
             AI Assistant
           </h1>
-
           <div className="top-actions">
 
-            <button className="plus-btn">
-              +
-            </button>
 
            <label className="upload-btn">
 
