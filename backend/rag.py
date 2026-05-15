@@ -1,10 +1,10 @@
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
+from langchain_huggingface import HuggingFaceEmbeddings
 import chromadb
 
 # Load embedding model
-model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
+model = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
 # Persistent vector database
@@ -41,9 +41,7 @@ chunks = [
 # Store chunks + embeddings
 for i, chunk in enumerate(chunks):
 
-    embedding = model.encode(
-        chunk
-    ).tolist()
+    embedding = model.embed_query(chunk)
 
     collection.add(
         embeddings=[embedding],

@@ -12,4 +12,3 @@ langchain-chroma
 langchain-groq
 langchain-huggingface
 langchain-experimental
-sentence-transformers
