@@ -39,10 +39,14 @@ from auth import (
     create_token
 )
 
+import logging
 import os
 import shutil
 
 from pypdf import PdfReader
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("ai-chatbot")
 
 # =========================
 # LOAD ENV
@@ -122,6 +126,34 @@ def get_gemini_model(model_name: str = "gemini-2.5-flash-lite"):
     _ensure_gemini_configured()
     return genai.GenerativeModel(model_name)
 
+def _extract_response_text(response) -> str:
+
+    try:
+        text = response.text or ""
+        if text.strip():
+            return text
+    except Exception as text_err:
+        logger.warning("response.text raised: %s", text_err)
+
+    try:
+        candidates = getattr(response, "candidates", []) or []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", []) if content else []
+            joined = "".join(
+                getattr(part, "text", "") or "" for part in parts
+            )
+            if joined.strip():
+                return joined
+            finish = getattr(candidate, "finish_reason", None)
+            if finish:
+                logger.warning("candidate finish_reason: %s", finish)
+    except Exception as fallback_err:
+        logger.warning("candidate extraction failed: %s", fallback_err)
+
+    return ""
+
+
 def generate_ai_text(prompt):
 
     if not GEMINI_API_KEY:
@@ -139,18 +171,21 @@ def generate_ai_text(prompt):
         try:
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
-            text = getattr(response, "text", "") or ""
+            text = _extract_response_text(response)
             if text.strip():
+                logger.info("Gemini reply via %s (%d chars)", model_name, len(text))
                 return text
+            last_error = Exception(f"empty response from {model_name}")
+            logger.warning("empty response from %s, trying next model", model_name)
+            continue
         except Exception as e:
             last_error = e
-            # Try next model on quota/rate-limit; surface other errors immediately.
-            msg = str(e).lower()
-            if "429" in msg or "quota" in msg or "rate" in msg or "exhaust" in msg:
-                continue
-            return f"Gemini API Error: {str(e)}"
+            logger.warning("%s failed: %s", model_name, e)
+            continue
 
-    return f"Gemini API Error: {str(last_error) if last_error else 'all models unavailable'}"
+    final_err = str(last_error) if last_error else "all models unavailable"
+    logger.error("All Gemini models failed: %s", final_err)
+    return f"Gemini API Error: {final_err}"
 
 def load_pdf_context():
 
@@ -419,22 +454,48 @@ Answer naturally.
             timeout=45
         )
 
-        if (
-            not reply or
-            reply.startswith("Backend Error:") or
-            reply.startswith("Gemini API Error:")
-        ):
+        if not reply or not reply.strip():
 
-            reply = fallback_chat_reply(question)
+            logger.error("Empty reply from generate_ai_text")
+            return {
+                "reply": fallback_chat_reply(question)
+            }
+
+        if reply.startswith("Backend Error:"):
+
+            logger.error("Backend error reply: %s", reply)
+            return {"reply": reply}
+
+        if reply.startswith("Gemini API Error:"):
+
+            logger.error("Gemini error reply: %s", reply)
+            short = reply[:200]
+            return {
+                "reply": (
+                    f"The AI service returned an error. {short}. "
+                    "Please try again or check the Gemini API key/quota."
+                )
+            }
 
         return {
             "reply": reply
         }
 
+    except asyncio.TimeoutError:
+
+        logger.error("Gemini call timed out after 45s")
+        return {
+            "reply": (
+                "The AI took too long to respond (over 45 seconds). "
+                "Please try again."
+            )
+        }
+
     except Exception as e:
 
+        logger.exception("Chat endpoint crashed")
         return {
-            "reply": fallback_chat_reply(req.message)
+            "reply": f"Backend error: {str(e)[:200]}"
         }
     
 # =========================

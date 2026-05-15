@@ -206,7 +206,7 @@ const [emailData, setEmailData] =
         behavior: "auto",
       });
 
-  }, [conversations, loading]);
+  }, [conversations, loading, currentChatId]);
 
   useEffect(() => {
 
@@ -230,9 +230,12 @@ const [emailData, setEmailData] =
 
   }, []);
 
+  const userEmail =
+    user?.email?.toLowerCase() || null;
+
   useEffect(() => {
 
-    if (!user) return;
+    if (!userEmail) return;
 
     const savedConversations =
       readJson(
@@ -240,7 +243,7 @@ const [emailData, setEmailData] =
         null
       );
 
-    const nextConversations =
+    const rawList =
       Array.isArray(savedConversations) &&
       savedConversations.length > 0
         ? savedConversations
@@ -248,18 +251,55 @@ const [emailData, setEmailData] =
             createStarterChat(),
           ];
 
+    const seenIds = new Set();
+
+    const nextConversations = rawList.map(
+      (chat) => {
+
+        const safeChat = {
+          id:
+            typeof chat?.id === "string" ||
+            typeof chat?.id === "number"
+              ? String(chat.id)
+              : makeChatId(),
+          title:
+            typeof chat?.title === "string"
+              ? chat.title
+              : "New Chat",
+          messages:
+            Array.isArray(chat?.messages)
+              ? chat.messages
+              : [],
+        };
+
+        if (seenIds.has(safeChat.id)) {
+
+          safeChat.id = makeChatId();
+        }
+
+        seenIds.add(safeChat.id);
+
+        return safeChat;
+      }
+    );
+
     const savedCurrentChatId =
       readJson(
         currentChatIdKey,
         null
       );
 
+    const savedIdString =
+      savedCurrentChatId == null
+        ? null
+        : String(savedCurrentChatId);
+
     const nextCurrentChatId =
       nextConversations.some(
         (chat) =>
-          chat.id === savedCurrentChatId
+          chat.id === savedIdString
       )
-        ? savedCurrentChatId
+        ? savedIdString
         : nextConversations[0].id;
 
     setConversations(
@@ -270,15 +310,11 @@ const [emailData, setEmailData] =
       nextCurrentChatId
     );
 
-  }, [
-    user,
-    conversationsKey,
-    currentChatIdKey
-  ]);
+  }, [userEmail]);
 
   useEffect(() => {
 
-    if (!user || !currentChatId) {
+    if (!userEmail || !currentChatId) {
 
       return;
     }
@@ -294,9 +330,7 @@ const [emailData, setEmailData] =
     );
 
   }, [
-    user,
-    conversationsKey,
-    currentChatIdKey,
+    userEmail,
     conversations,
     currentChatId
   ]);
@@ -1683,28 +1717,12 @@ const startContinuousVoice =
 
                   components={{
 
-  p({ children }) {
+  pre({ children }) {
 
-    const hasCodeBlock =
-      Array.isArray(children) &&
-
-      children.some(
-
-        (child) =>
-
-          child?.type === "pre"
-      );
-
-    if (hasCodeBlock) {
-
-      return <>{children}</>;
-    }
-
-    return <p>{children}</p>;
+    return <>{children}</>;
   },
 
   code({
-    inline,
     className,
     children,
     ...props
@@ -1720,6 +1738,21 @@ const startContinuousVoice =
         /\n$/,
         ""
       );
+
+    if (!match) {
+
+      return (
+
+        <code
+          className={className}
+          {...props}
+        >
+
+          {children}
+
+        </code>
+      );
+    }
 
     const copyCode =
       async () => {
@@ -1738,74 +1771,53 @@ const startContinuousVoice =
         }
       };
 
-    if (!inline) {
-
-      return (
-
-        <div className="code-block-wrapper">
-
-          <div className="code-actions">
-
-            <button
-              className="copy-btn"
-              onClick={copyCode}
-            >
-              Copy
-            </button>
-
-            <button
-              className="run-btn"
-              onClick={() =>
-
-                navigate(
-                  "/interpreter",
-                  {
-
-                    state: {
-                      code: codeString,
-                    },
-                  }
-                )
-              }
-            >
-              Interpreter
-            </button>
-
-          </div>
-
-          <SyntaxHighlighter
-
-            style={oneDark}
-
-            language={
-              match
-                ? match[1]
-                : "python"
-            }
-
-            PreTag="div"
-
-            {...props}
-          >
-
-            {codeString}
-
-          </SyntaxHighlighter>
-
-        </div>
-      );
-    }
-
     return (
 
-      <code
-        className={className}
-        {...props}
-      >
+      <div className="code-block-wrapper">
 
-        {children}
+        <div className="code-actions">
 
-      </code>
+          <button
+            className="copy-btn"
+            onClick={copyCode}
+          >
+            Copy
+          </button>
+
+          <button
+            className="run-btn"
+            onClick={() =>
+
+              navigate(
+                "/interpreter",
+                {
+
+                  state: {
+                    code: codeString,
+                  },
+                }
+              )
+            }
+          >
+            Interpreter
+          </button>
+
+        </div>
+
+        <SyntaxHighlighter
+
+          style={oneDark}
+
+          language={match[1]}
+
+          PreTag="div"
+        >
+
+          {codeString}
+
+        </SyntaxHighlighter>
+
+      </div>
     );
   },
 }}
