@@ -203,32 +203,12 @@ def load_pdf_context():
         return file.read()[-5000:]
 
 
-def fallback_chat_reply(question: str) -> str:
-
-    text = (question or "").strip()
-    lower_text = text.lower()
-
-    if lower_text in {"hi", "hello", "hey", "hii"}:
-
-        return (
-            "Hi! I am here. The AI service is unavailable right now, "
-            "but the chat is working."
-        )
-
-    if (
-        lower_text.startswith("who is ") or
-        lower_text.startswith("what is ")
-    ):
-
-        return (
-            "I cannot look that up properly because the AI service is "
-            "unavailable right now. Please try again in a moment after "
-            "checking the backend API key and server logs."
-        )
+def fallback_chat_reply() -> str:
 
     return (
-        "I received your message, but the AI service is unavailable "
-        "right now. Please try again in a moment."
+        "The AI returned an empty response. This usually means a safety "
+        "filter blocked it or the Gemini free-tier quota is exhausted. "
+        "Check the backend logs for the specific reason and try again."
     )
 
 # =========================
@@ -458,7 +438,7 @@ Answer naturally.
 
             logger.error("Empty reply from generate_ai_text")
             return {
-                "reply": fallback_chat_reply(question)
+                "reply": fallback_chat_reply()
             }
 
         if reply.startswith("Backend Error:"):
