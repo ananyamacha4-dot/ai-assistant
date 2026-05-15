@@ -74,12 +74,32 @@ function readJson(key, fallback) {
   }
 }
 
-function createFallbackReply() {
+function createFallbackReply(error) {
+
+  if (error?.name === "TimeoutError" ||
+      error?.name === "AbortError") {
+    return (
+      "The request timed out. The server may be waking up. " +
+      "Please try again."
+    );
+  }
+
+  if (error?.message?.includes("Failed to fetch") ||
+      error?.message?.includes("NetworkError") ||
+      error?.message?.includes("ERR_CONNECTION_REFUSED")) {
+    return (
+      "Cannot reach the AI server. It may be starting up " +
+      "(this can take up to 30 seconds on free hosting). " +
+      "Please try again."
+    );
+  }
+
+  if (error?.message) {
+    return error.message;
+  }
 
   return (
-    "The AI server is waking up (free tier cold start). " +
-    "This usually takes 30 to 60 seconds the first time. " +
-    "Please send your message again in a moment."
+    "Something went wrong. Please try again."
   );
 }
 
@@ -210,23 +230,21 @@ const [emailData, setEmailData] =
 
   useEffect(() => {
 
-    const controller = new AbortController();
+    const pingBackend = () => {
 
-    const warmupTimeout = setTimeout(
-      () => controller.abort(),
-      90000
+      fetch(`${API_BASE_URL}/health`, {
+        signal: AbortSignal.timeout(15000),
+      }).catch(() => {});
+    };
+
+    pingBackend();
+
+    const keepAlive = setInterval(
+      pingBackend,
+      4 * 60 * 1000
     );
 
-    fetch(`${API_BASE_URL}/health`, {
-      signal: controller.signal,
-    })
-      .catch(() => {})
-      .finally(() => clearTimeout(warmupTimeout));
-
-    return () => {
-      clearTimeout(warmupTimeout);
-      controller.abort();
-    };
+    return () => clearInterval(keepAlive);
 
   }, []);
 
@@ -1007,63 +1025,82 @@ const generateDocument =
 
     setLoading(true);
 
-    let timeoutId = null;
-
     try {
 
-      const controller =
-        new AbortController();
+      const maxRetries = 2;
 
-      timeoutId = setTimeout(
-        () => controller.abort(),
-        90000
-      );
+      let replyText = "";
 
-      const response = await fetch(
-        `${API_BASE_URL}/chat`,
-        {
-
-          method: "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-
-          body: JSON.stringify({
-
-            message: currentMessage,
-
-            history:
-              activeChat.messages || [],
-          }),
-
-          signal: controller.signal,
-        }
-      );
-
-      if (!response.ok) {
-
-        throw new Error(
-          "Backend chat request failed"
-        );
-      }
-
-      const data =
-        await response.json();
-
-      const replyText =
-        (data.reply || "").trim();
-
-      if (
-        !replyText ||
-        replyText.startsWith("Backend Error:") ||
-        replyText.startsWith("Gemini API Error:")
+      for (
+        let attempt = 0;
+        attempt <= maxRetries;
+        attempt++
       ) {
 
-        throw new Error(
-          replyText || "Empty AI reply"
-        );
+        try {
+
+          const response = await fetch(
+            `${API_BASE_URL}/chat`,
+            {
+
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
+
+              body: JSON.stringify({
+
+                message: currentMessage,
+
+                history:
+                  activeChat.messages || [],
+              }),
+
+              signal: AbortSignal.timeout(60000),
+            }
+          );
+
+          if (!response.ok) {
+
+            throw new Error(
+              "Backend chat request failed"
+            );
+          }
+
+          const data =
+            await response.json();
+
+          replyText =
+            (data.reply || "").trim();
+
+          if (
+            !replyText ||
+            replyText.startsWith("Backend Error:") ||
+            replyText.startsWith("Gemini API Error:")
+          ) {
+
+            throw new Error(
+              replyText || "Empty AI reply"
+            );
+          }
+
+          break;
+
+        } catch (retryError) {
+
+          if (attempt < maxRetries) {
+
+            await new Promise(
+              (r) => setTimeout(r, 3000)
+            );
+
+            continue;
+          }
+
+          throw retryError;
+        }
       }
 
       const botMessage = {
@@ -1115,7 +1152,7 @@ const generateDocument =
 
         sender: "bot",
 
-        text: createFallbackReply(),
+        text: createFallbackReply(error),
       };
 
       const errorMessageKey =
