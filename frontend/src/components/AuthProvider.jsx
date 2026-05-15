@@ -148,6 +148,28 @@ export function AuthProvider({
 
   useEffect(() => {
 
+    let authResolved = false;
+
+    const fallbackTimer = setTimeout(
+      () => {
+
+        if (!authResolved) {
+
+          authResolved = true;
+
+          setUser(
+            readJson(
+              CURRENT_USER_KEY,
+              null
+            )
+          );
+
+          setLoading(false);
+        }
+      },
+      3000
+    );
+
     getRedirectResult(auth)
       .then((credential) => {
 
@@ -175,6 +197,10 @@ export function AuthProvider({
       onAuthStateChanged(
         auth,
         (currentFirebaseUser) => {
+
+          authResolved = true;
+
+          clearTimeout(fallbackTimer);
 
           if (currentFirebaseUser) {
 
@@ -216,6 +242,8 @@ export function AuthProvider({
     );
 
     return () => {
+
+      clearTimeout(fallbackTimer);
 
       unsubscribeAuth();
 
