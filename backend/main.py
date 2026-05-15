@@ -69,33 +69,56 @@ app.add_middleware(
 # EMBEDDINGS
 # =========================
 
-embedding_model()= None
+embedding_model = None
+vectorstore = None
+retriever = None
+llm = None
 
 def get_embedding_model():
+
     global embedding_model
 
     if embedding_model is None:
+
         embedding_model = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
 
     return embedding_model
+
 # =========================
 # CHROMADB
 # =========================
 
-vectorstore = Chroma(
-    persist_directory="./chroma_db",
-    embedding_function=get_embedding_model()
-)
+def get_vectorstore():
+
+    global vectorstore
+
+    if vectorstore is None:
+
+        vectorstore = Chroma(
+            persist_directory="./chroma_db",
+            embedding_function=get_embedding_model()
+        )
+
+    return vectorstore
 
 # =========================
 # RETRIEVER
 # =========================
 
-retriever = vectorstore.as_retriever(
-    search_kwargs={"k": 2}
-)
+def get_retriever():
+
+    global retriever
+
+    if retriever is None:
+
+        retriever = get_vectorstore().as_retriever(
+            search_kwargs={"k": 2}
+        )
+
+    return retriever
+
 # =========================
 # PYTHON REPL
 # =========================
@@ -106,11 +129,19 @@ python_repl = PythonREPLTool()
 # GROQ MODEL
 # =========================
 
-llm = ChatGroq(
-    groq_api_key=GROQ_API_KEY,
-    model_name="llama-3.1-8b-instant",
-    temperature=0.7
-)
+def get_llm():
+
+    global llm
+
+    if llm is None:
+
+        llm = ChatGroq(
+            groq_api_key=GROQ_API_KEY,
+            model_name="llama-3.1-8b-instant",
+            temperature=0.7
+        )
+
+    return llm
 
 # =========================
 # REQUEST MODELS
@@ -273,7 +304,7 @@ async def chat(req: ChatRequest):
         # VECTOR SEARCH
         # =========================
 
-        docs = retriever.invoke(question)
+        docs = get_retriever().invoke(question)
 
         # =========================
         # CONTEXT EXTRACTION
@@ -321,7 +352,7 @@ Answer naturally.
         # GROQ RESPONSE
         # =========================
 
-        response = llm.invoke(
+        response = get_llm().invoke(
             final_prompt
         )
 
@@ -335,16 +366,6 @@ Answer naturally.
             "reply": f"Backend Error: {str(e)}"
         }
     
-@app.post("/chat")
-async def chat(req: ChatRequest):
-
-    ...
-    
-    return {
-        "reply": response.content
-    }
-
-
 # =========================
 # RUN PYTHON
 # =========================
@@ -449,7 +470,7 @@ Subject: ...
 Body: ...
 """
 
-        response = llm.invoke(
+        response = get_llm().invoke(
             email_prompt
         )
 
@@ -610,7 +631,7 @@ async def upload_pdf(
 
         # STORE IN CHROMADB
 
-        vectorstore.add_texts(
+        get_vectorstore().add_texts(
             chunks
         )
 
