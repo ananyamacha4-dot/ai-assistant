@@ -1244,11 +1244,6 @@ const generateDocument =
       );
     } finally {
 
-      if (timeoutId) {
-
-        clearTimeout(timeoutId);
-      }
-
       setLoading(false);
     }
 
