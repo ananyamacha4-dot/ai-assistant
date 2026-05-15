@@ -14,8 +14,16 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 import google.generativeai as genai
+from docx import Document
+from docx.shared import Pt
+
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.tools import tool
 
 from database import SessionLocal, engine
 from models import User, Base
@@ -135,7 +143,15 @@ class EmailRequest(BaseModel):
 
     description: str = ""
 
-    length: str = "medium"    
+    length: str = "medium"
+
+class DocumentRequest(BaseModel):
+
+    topic: str
+
+    doc_type: str = "document"
+
+    length: str = "medium"
 
 # =========================
 # ROOT
@@ -524,6 +540,143 @@ Body: ...
             "message":
             str(e)
         }
+# =========================
+# DOCUMENT GENERATION (LangChain tool wrapping Gemini)
+# =========================
+
+@tool
+def generate_document_content(
+    topic: str,
+    doc_type: str,
+    length: str,
+) -> str:
+    """Generate a professional document body via a Gemini-backed LangChain chain.
+
+    Returns plain text: first line is the title, then a blank line,
+    then the body paragraphs.
+    """
+
+    length_guide = {
+        "short":  "Approximately 200 words.",
+        "medium": "Approximately 500 words.",
+        "long":   "Approximately 1000 words.",
+    }.get(length, "Approximately 500 words.")
+
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        google_api_key=GEMINI_API_KEY,
+        temperature=0.5,
+    )
+
+    prompt = ChatPromptTemplate.from_messages([
+        (
+            "system",
+            "You are a professional writer producing clean, "
+            "well-structured documents in a confident tone."
+        ),
+        (
+            "human",
+            "Write a {doc_type} about:\n\n{topic}\n\n"
+            "Length: {length_guide}\n\n"
+            "Format requirements:\n"
+            "- The FIRST LINE must be a clear, descriptive title only.\n"
+            "- Then a single blank line.\n"
+            "- Then the body in proper paragraphs separated by blank lines.\n"
+            "- Professional tone, no markdown, no asterisks, no headings."
+        ),
+    ])
+
+    chain = prompt | llm | StrOutputParser()
+
+    return chain.invoke({
+        "topic": topic,
+        "doc_type": doc_type,
+        "length_guide": length_guide,
+    })
+
+
+def _safe_filename(name: str) -> str:
+
+    cleaned = "".join(
+        c if (c.isalnum() or c in (" ", "-", "_")) else ""
+        for c in name
+    ).strip()
+
+    return (cleaned[:60] or "document")
+
+
+@app.post("/generate-document")
+async def generate_document(
+    req: DocumentRequest
+):
+
+    try:
+
+        if not GEMINI_API_KEY:
+
+            return {
+                "error":
+                    "GEMINI_API_KEY is not set "
+                    "in environment variables."
+            }
+
+        content = generate_document_content.invoke({
+            "topic":    req.topic,
+            "doc_type": req.doc_type or "document",
+            "length":   req.length or "medium",
+        })
+
+        lines = [
+            line.rstrip()
+            for line in content.strip().split("\n")
+            if line.strip()
+        ]
+
+        title = lines[0] if lines else "Document"
+        body_lines = lines[1:] if len(lines) > 1 else []
+
+        doc = Document()
+
+        heading = doc.add_heading(title, level=1)
+
+        for run in heading.runs:
+            run.font.size = Pt(20)
+
+        for line in body_lines:
+
+            paragraph = doc.add_paragraph(line)
+
+            for run in paragraph.runs:
+                run.font.size = Pt(11)
+
+        buffer = io.BytesIO()
+
+        doc.save(buffer)
+
+        buffer.seek(0)
+
+        filename = f"{_safe_filename(title)}.docx"
+
+        return StreamingResponse(
+            buffer,
+            media_type=(
+                "application/vnd.openxmlformats-"
+                "officedocument.wordprocessingml.document"
+            ),
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="{filename}"',
+                "Access-Control-Expose-Headers":
+                    "Content-Disposition",
+            },
+        )
+
+    except Exception as e:
+
+        return {
+            "error": str(e)
+        }
+
 # =========================
 # TRANSCRIBE AUDIO (Whisper-style, powered by Gemini)
 # =========================

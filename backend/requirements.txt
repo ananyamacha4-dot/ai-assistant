@@ -7,3 +7,6 @@ PyJWT
 python-dotenv
 pypdf
 google-generativeai
+python-docx
+langchain-core
+langchain-google-genai

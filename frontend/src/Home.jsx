@@ -1,5 +1,6 @@
 import {
   ArrowUp,
+  FilePlus,
   FileText,
   Mail,
   Mic,
@@ -9,7 +10,7 @@ import {
   X
 }
 from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   useNavigate
 } from "react-router-dom";
@@ -91,6 +92,18 @@ function Home() {
     useState(null);
 
   const [pdfUploading, setPdfUploading] =
+    useState(false);
+
+  const [showDocModal, setShowDocModal] =
+    useState(false);
+
+  const [docData, setDocData] = useState({
+    topic: "",
+    doc_type: "letter",
+    length: "medium",
+  });
+
+  const [docGenerating, setDocGenerating] =
     useState(false);
 
   const {
@@ -235,6 +248,8 @@ const [emailData, setEmailData] =
 
   const createNewChat = () => {
 
+    releaseVoiceResources();
+
     const newChat = {
 
       id: Date.now(),
@@ -320,6 +335,104 @@ const sendEmail =
       alert(
         "Failed to send email"
       );
+    }
+  };
+
+const generateDocument =
+  async () => {
+
+    if (!docData.topic.trim()) {
+
+      alert("Please describe the document.");
+
+      return;
+    }
+
+    setDocGenerating(true);
+
+    try {
+
+      const response = await fetch(
+        `${API_BASE_URL}/generate-document`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            topic:    docData.topic,
+            doc_type: docData.doc_type,
+            length:   docData.length,
+          }),
+        }
+      );
+
+      const contentType =
+        response.headers.get("content-type") || "";
+
+      if (
+        !response.ok ||
+        contentType.includes("application/json")
+      ) {
+
+        const errJson = await response
+          .json()
+          .catch(() => ({}));
+
+        throw new Error(
+          errJson.error ||
+          "Document generation failed"
+        );
+      }
+
+      const disposition =
+        response.headers.get(
+          "content-disposition"
+        ) || "";
+
+      const match = disposition.match(
+        /filename="?([^"]+)"?/i
+      );
+
+      const filename = match
+        ? match[1]
+        : `${docData.doc_type || "document"}.docx`;
+
+      const blob = await response.blob();
+
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+
+      a.href = url;
+
+      a.download = filename;
+
+      document.body.appendChild(a);
+
+      a.click();
+
+      a.remove();
+
+      URL.revokeObjectURL(url);
+
+      setShowDocModal(false);
+
+      setDocData((prev) => ({
+        ...prev,
+        topic: "",
+      }));
+
+    } catch (error) {
+
+      alert(
+        error.message ||
+        "Document generation failed"
+      );
+
+    } finally {
+
+      setDocGenerating(false);
     }
   };
 
@@ -413,9 +526,8 @@ const sendEmail =
 
   }, [message]);
 
-  useEffect(() => {
-
-    return () => {
+  const releaseVoiceResources =
+    useCallback(() => {
 
       if (window.speechSynthesis) {
 
@@ -434,6 +546,8 @@ const sendEmail =
         } catch (e) {}
       }
 
+      mediaRecorderRef.current = null;
+
       const stream = audioStreamRef.current;
 
       if (stream) {
@@ -444,8 +558,62 @@ const sendEmail =
 
         audioStreamRef.current = null;
       }
+
+      audioChunksRef.current = [];
+
+      setIsSpeaking(false);
+
+      setIsRecording(false);
+
+      setIsListening(false);
+
+      setSpeakingMessageKey(null);
+    }, []);
+
+  useEffect(() => {
+
+    return () => {
+
+      releaseVoiceResources();
     };
-  }, []);
+  }, [releaseVoiceResources]);
+
+  useEffect(() => {
+
+    const handlePageExit = () => {
+
+      releaseVoiceResources();
+    };
+
+    window.addEventListener(
+      "beforeunload",
+      handlePageExit
+    );
+
+    window.addEventListener(
+      "pagehide",
+      handlePageExit
+    );
+
+    return () => {
+
+      window.removeEventListener(
+        "beforeunload",
+        handlePageExit
+      );
+
+      window.removeEventListener(
+        "pagehide",
+        handlePageExit
+      );
+    };
+  }, [releaseVoiceResources]);
+
+  useEffect(() => {
+
+    releaseVoiceResources();
+
+  }, [currentChatId, releaseVoiceResources]);
 
   const sendMessageText =
     async (
@@ -1332,6 +1500,16 @@ const stopVoiceInput = () => {
       </button>
 
       <button
+        type="button"
+        className="composer-icon-btn doc-btn"
+        title="Generate Document (.docx)"
+        aria-label="Generate Document"
+        onClick={() => setShowDocModal(true)}
+      >
+        <FilePlus size={20} />
+      </button>
+
+      <button
         className={`composer-icon-btn mic-btn ${
           isSpeaking
             ? "speaking"
@@ -1541,6 +1719,92 @@ const stopVoiceInput = () => {
     </div>
   )
 }
+
+      {showDocModal && (
+
+        <div className="email-modal-overlay">
+
+          <div className="email-modal">
+
+            <h2>Generate Document</h2>
+
+            <textarea
+              placeholder="Describe the document you want (e.g. 'Cover letter for a junior React role at a fintech startup')"
+              value={docData.topic}
+              onChange={(e) =>
+                setDocData({
+                  ...docData,
+                  topic: e.target.value,
+                })
+              }
+            />
+
+            <select
+              value={docData.doc_type}
+              onChange={(e) =>
+                setDocData({
+                  ...docData,
+                  doc_type: e.target.value,
+                })
+              }
+            >
+              <option value="letter">Letter</option>
+              <option value="cover letter">Cover Letter</option>
+              <option value="essay">Essay</option>
+              <option value="report">Report</option>
+              <option value="memo">Memo</option>
+              <option value="resume summary">Resume Summary</option>
+              <option value="proposal">Proposal</option>
+              <option value="document">Generic Document</option>
+            </select>
+
+            <select
+              value={docData.length}
+              onChange={(e) =>
+                setDocData({
+                  ...docData,
+                  length: e.target.value,
+                })
+              }
+            >
+              <option value="short">Short (~200 words)</option>
+              <option value="medium">
+                Medium (~500 words) — default
+              </option>
+              <option value="long">Long (~1000 words)</option>
+            </select>
+
+            <div className="email-modal-buttons">
+
+              <button
+                className="cancel-btn"
+                onClick={() =>
+                  setShowDocModal(false)
+                }
+                disabled={docGenerating}
+              >
+                Cancel
+              </button>
+
+              <button
+                className="send-email-btn"
+                onClick={generateDocument}
+                disabled={
+                  docGenerating ||
+                  !docData.topic.trim()
+                }
+              >
+                {docGenerating
+                  ? "Generating..."
+                  : "Generate & Download"}
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+      )}
 
     </div>
   );
