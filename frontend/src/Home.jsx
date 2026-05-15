@@ -1,7 +1,8 @@
 import {
   ArrowUp,
   Mail,
-  Mic
+  Mic,
+  Square
 }
 from "lucide-react";
 import { useState, useEffect, useRef } from "react";
@@ -61,6 +62,9 @@ function Home() {
     useState(false);
 
   const [isListening, setIsListening] =
+    useState(false);
+
+  const [isSpeaking, setIsSpeaking] =
     useState(false);
 
   const recognitionRef = useRef(null);
@@ -319,10 +323,43 @@ const sendEmail =
 
       speech.pitch = 1;
 
+      speech.onstart = () => {
+        setIsSpeaking(true);
+      };
+
+      speech.onend = () => {
+        setIsSpeaking(false);
+      };
+
+      speech.onerror = () => {
+        setIsSpeaking(false);
+      };
+
       window.speechSynthesis.speak(
         speech
       );
     };
+
+  const stopSpeaking = () => {
+
+    if (window.speechSynthesis) {
+
+      window.speechSynthesis.cancel();
+    }
+
+    setIsSpeaking(false);
+  };
+
+  useEffect(() => {
+
+    return () => {
+
+      if (window.speechSynthesis) {
+
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
 
   const sendMessageText =
     async (
@@ -943,21 +980,40 @@ const startVoiceInput = () => {
 
     <button
       className={`composer-icon-btn mic-btn ${
-        isListening ? "listening" : ""
+        isSpeaking
+          ? "speaking"
+          : isListening
+          ? "listening"
+          : ""
       }`}
-      onClick={startVoiceInput}
+      onClick={
+        isSpeaking
+          ? stopSpeaking
+          : startVoiceInput
+      }
       title={
-        isListening
+        isSpeaking
+          ? "Stop speaking"
+          : isListening
           ? "Listening"
           : "Voice input"
       }
       aria-label={
-        isListening
+        isSpeaking
+          ? "Stop speaking"
+          : isListening
           ? "Listening"
           : "Start voice input"
       }
     >
-      <Mic size={21} />
+      {isSpeaking ? (
+        <Square
+          size={18}
+          fill="currentColor"
+        />
+      ) : (
+        <Mic size={21} />
+      )}
     </button>
 
     <div
