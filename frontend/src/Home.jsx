@@ -1,4 +1,8 @@
-import { Mail }
+import {
+  ArrowUp,
+  Mail,
+  Mic
+}
 from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import {
@@ -55,6 +59,11 @@ function Home() {
 
   const [profileOpen, setProfileOpen] =
     useState(false);
+
+  const [isListening, setIsListening] =
+    useState(false);
+
+  const recognitionRef = useRef(null);
 
   const {
     user,
@@ -285,15 +294,60 @@ const sendEmail =
       );
     }
   };
-  const sendMessage = async () => {
 
-    if (!message.trim()) return;
+  const speakText =
+    (text) => {
+
+      if (!window.speechSynthesis) {
+
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+
+      const speech =
+        new SpeechSynthesisUtterance(
+          text.replace(
+            /[`*_#>\[\]()]/g,
+            ""
+          )
+        );
+
+      speech.lang = "en-US";
+
+      speech.rate = 1;
+
+      speech.pitch = 1;
+
+      window.speechSynthesis.speak(
+        speech
+      );
+    };
+
+  const sendMessageText =
+    async (
+      text,
+      options = {}
+    ) => {
+
+    const currentMessage =
+      text.trim();
+
+    if (!currentMessage) return;
+
+    const activeChat =
+      conversations.find(
+        (chat) =>
+          chat.id === currentChatId
+      );
+
+    if (!activeChat) return;
 
     const userMessage = {
 
       sender: "user",
 
-      text: message,
+      text: currentMessage,
     };
 
     const updatedConversations =
@@ -309,7 +363,7 @@ const sendEmail =
 
             title:
               chat.messages.length === 0
-                ? message.slice(0, 25)
+                ? currentMessage.slice(0, 25)
                 : chat.title,
 
             messages: [
@@ -325,9 +379,6 @@ const sendEmail =
     setConversations(
       updatedConversations
     );
-
-    const currentMessage =
-      message;
 
     setMessage("");
 
@@ -351,7 +402,7 @@ const sendEmail =
             message: currentMessage,
 
             history:
-              currentChat?.messages || [],
+              activeChat.messages || [],
           }),
         }
       );
@@ -365,6 +416,13 @@ const sendEmail =
 
         text: data.reply,
       };
+
+      if (options.speak) {
+
+        speakText(
+          botMessage.text
+        );
+      }
 
       setConversations(
         (prev) =>
@@ -399,6 +457,13 @@ const sendEmail =
           "Error connecting to backend.",
       };
 
+      if (options.speak) {
+
+        speakText(
+          errorMessage.text
+        );
+      }
+
       setConversations(
         (prev) =>
           prev.map((chat) => {
@@ -425,6 +490,14 @@ const sendEmail =
 
     setLoading(false);
   };
+
+  const sendMessage =
+    async () => {
+
+      await sendMessageText(
+        message
+      );
+    };
 const uploadPDF =
   async (e) => {
 
@@ -470,6 +543,82 @@ const uploadPDF =
       );
     }
   };
+
+const startVoiceInput = () => {
+
+  const SpeechRecognition =
+    window.SpeechRecognition ||
+    window.webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+
+    alert(
+      "Speech recognition not supported"
+    );
+
+    return;
+  }
+
+  const recognition =
+    new SpeechRecognition();
+
+  recognitionRef.current =
+    recognition;
+
+  recognition.continuous = false;
+
+  recognition.interimResults = false;
+
+  recognition.lang = "en-US";
+
+  setIsListening(true);
+
+  recognition.start();
+
+  recognition.onresult =
+    async (event) => {
+
+    const transcript =
+      event.results[0][0].transcript;
+
+    setIsListening(false);
+
+    await sendMessageText(
+      transcript,
+      {
+        speak: true,
+      }
+    );
+  };
+
+  recognition.onspeechend = () => {
+
+    recognition.stop();
+  };
+
+  recognition.onnomatch = () => {
+
+    setIsListening(false);
+
+    speakText(
+      "I could not understand that. Please try again."
+    );
+  };
+
+  recognition.onerror = () => {
+
+    setIsListening(false);
+
+    speakText(
+      "I could not hear you. Please try again."
+    );
+  };
+
+  recognition.onend = () => {
+
+    setIsListening(false);
+  };
+};
   return (
 
     <div className="app">
@@ -590,20 +739,15 @@ const uploadPDF =
           </h1>
           <div className="top-actions">
 
-
-           <label className="upload-btn">
-
-  Upload PDF
-
-  <input
-    type="file"
-    accept=".pdf"
-    hidden
-
-    onChange={uploadPDF}
-  />
-
-</label>
+            <label className="upload-btn">
+              Upload PDF
+              <input
+                type="file"
+                accept=".pdf"
+                hidden
+                onChange={uploadPDF}
+              />
+            </label>
 
           </div>
 
@@ -781,54 +925,61 @@ const uploadPDF =
         </div>
 
         {/* INPUT */}
-        <div className="input-container">
+       <div className="input-container">
 
-          <input
-            type="text"
+  <input
+    type="text"
+    placeholder="Ask anything..."
+    value={message}
+    onChange={(e) => setMessage(e.target.value)}
+    onKeyDown={(e) => {
+      if (e.key === "Enter") {
+        sendMessage();
+      }
+    }}
+  />
 
-            placeholder="Ask anything..."
+  <div className="input-actions">
 
-            value={message}
+    <button
+      className={`composer-icon-btn mic-btn ${
+        isListening ? "listening" : ""
+      }`}
+      onClick={startVoiceInput}
+      title={
+        isListening
+          ? "Listening"
+          : "Voice input"
+      }
+      aria-label={
+        isListening
+          ? "Listening"
+          : "Start voice input"
+      }
+    >
+      <Mic size={21} />
+    </button>
 
-            onChange={(e) =>
-              setMessage(
-                e.target.value
-              )
-            }
+    <div
+      className="email-icon-wrapper"
+      title="Send Email"
+      onClick={() => setShowEmailModal(true)}
+    >
+      <Mail size={22} />
+    </div>
 
-            onKeyDown={(e) => {
-
-              if (
-                e.key === "Enter"
-              ) {
-
-                sendMessage();
-              }
-            }}
-          />
-
-          <div className="input-actions">
-
-  <div
-    className="email-icon-wrapper"
-    title="Send Email"
-    onClick={() =>
-      setShowEmailModal(true)
-    }
-  >
-
-    <Mail size={22} />
+    <button
+      className="composer-icon-btn send-btn"
+      onClick={sendMessage}
+      title="Send message"
+      aria-label="Send message"
+    >
+      <ArrowUp size={24} strokeWidth={3} />
+    </button>
 
   </div>
 
-  <button onClick={sendMessage}>
-    Send
-  </button>
-
 </div>
-
-        </div>
-
       </div>
       {
   showEmailModal && (

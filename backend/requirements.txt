@@ -6,4 +6,4 @@ bcrypt
 PyJWT
 python-dotenv
 pypdf
-groq
+google-generativeai

@@ -1,3 +1,4 @@
+
 import smtplib
 
 from email.mime.text import MIMEText
@@ -14,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from dotenv import load_dotenv
-from groq import Groq
+import google.generativeai as genai
 
 from database import SessionLocal, engine
 from models import User, Base
@@ -35,7 +36,7 @@ from pypdf import PdfReader
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PDF_CONTEXT_FILE = "pdf_context.txt"
 
 # =========================
@@ -72,41 +73,28 @@ app.add_middleware(
 # LIGHTWEIGHT AI HELPERS
 # =========================
 
-groq_client = None
-
-def get_groq_client():
-
-    global groq_client
-
-    if groq_client is None:
-
-        groq_client = Groq(
-            api_key=GROQ_API_KEY
-        )
-
-    return groq_client
+def get_gemini_model():
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is not set in environment variables.")
+    
+    genai.configure(api_key=GEMINI_API_KEY)
+    return genai.GenerativeModel('gemini-pro')
 
 def generate_ai_text(prompt):
 
-    if not GROQ_API_KEY:
+    if not GEMINI_API_KEY:
 
         return (
-            "Backend Error: GROQ_API_KEY is not set "
-            "in Render environment variables."
+            "Backend Error: GEMINI_API_KEY is not set "
+            "in environment variables."
         )
 
-    response = get_groq_client().chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ],
-        temperature=0.7,
-    )
-
-    return response.choices[0].message.content
+    try:
+        model = get_gemini_model()
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Gemini API Error: {str(e)}"
 
 def load_pdf_context():
 
@@ -169,7 +157,7 @@ def health():
 
     return {
         "status": "ok",
-        "provider": "groq"
+        "provider": "gemini"
     }
 
 # =========================
