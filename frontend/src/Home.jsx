@@ -33,10 +33,25 @@ from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import "./index.css";
 
+function makeChatId() {
+
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+
+    return crypto.randomUUID();
+  }
+
+  return (
+    `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  );
+}
+
 function createStarterChat() {
 
   return {
-    id: Date.now(),
+    id: makeChatId(),
     title: "New Chat",
     messages: [],
   };
@@ -59,6 +74,15 @@ function readJson(key, fallback) {
   }
 }
 
+function createFallbackReply() {
+
+  return (
+    "The AI server is waking up (free tier cold start). " +
+    "This usually takes 30 to 60 seconds the first time. " +
+    "Please send your message again in a moment."
+  );
+}
+
 function Home() {
   const [showEmailModal, setShowEmailModal] =
   useState(false);
@@ -78,7 +102,12 @@ function Home() {
   const [speakingMessageKey, setSpeakingMessageKey] =
     useState(null);
 
+    const [voiceMode, setVoiceMode] =
+  useState(false);
+
   const mediaRecorderRef = useRef(null);
+
+  const speechRecognitionRef = useRef(null);
 
   const audioChunksRef = useRef([]);
 
@@ -87,6 +116,10 @@ function Home() {
   const pdfInputRef = useRef(null);
 
   const textareaRef = useRef(null);
+
+  const audioPlayerRef = useRef(null);
+
+  const audioPlayerUrlRef = useRef(null);
 
   const [attachedPdf, setAttachedPdf] =
     useState(null);
@@ -105,6 +138,11 @@ function Home() {
 
   const [docGenerating, setDocGenerating] =
     useState(false);
+
+  const [docElapsed, setDocElapsed] =
+    useState(0);
+
+  const docTimerRef = useRef(null);
 
   const {
     user,
@@ -164,10 +202,33 @@ const [emailData, setEmailData] =
 
     messagesEndRef.current
       ?.scrollIntoView({
-        behavior: "smooth",
+        block: "end",
+        behavior: "auto",
       });
 
-  }, [conversations]);
+  }, [conversations, loading]);
+
+  useEffect(() => {
+
+    const controller = new AbortController();
+
+    const warmupTimeout = setTimeout(
+      () => controller.abort(),
+      90000
+    );
+
+    fetch(`${API_BASE_URL}/health`, {
+      signal: controller.signal,
+    })
+      .catch(() => {})
+      .finally(() => clearTimeout(warmupTimeout));
+
+    return () => {
+      clearTimeout(warmupTimeout);
+      controller.abort();
+    };
+
+  }, []);
 
   useEffect(() => {
 
@@ -250,9 +311,26 @@ const [emailData, setEmailData] =
 
     releaseVoiceResources();
 
+    setMessage("");
+
+    setAttachedPdf(null);
+
+    const existingEmpty = conversations.find(
+      (chat) =>
+        chat.messages.length === 0 &&
+        chat.title === "New Chat"
+    );
+
+    if (existingEmpty) {
+
+      setCurrentChatId(existingEmpty.id);
+
+      return;
+    }
+
     const newChat = {
 
-      id: Date.now(),
+      id: makeChatId(),
 
       title: "New Chat",
 
@@ -263,9 +341,7 @@ const [emailData, setEmailData] =
       (prev) => [newChat, ...prev]
     );
 
-    setCurrentChatId(
-      newChat.id
-    );
+    setCurrentChatId(newChat.id);
   };
 
   const profileName =
@@ -350,10 +426,19 @@ const generateDocument =
 
     setDocGenerating(true);
 
+    const controller = new AbortController();
+
+    const timeoutMs = 90 * 1000;
+
+    const timeoutId = setTimeout(() => {
+
+      controller.abort();
+    }, timeoutMs);
+
     try {
 
       const response = await fetch(
-        `${API_BASE_URL}/generate-document`,
+        `${API_BASE_URL}/generate-pdf`,
         {
           method: "POST",
           headers: {
@@ -364,8 +449,11 @@ const generateDocument =
             doc_type: docData.doc_type,
             length:   docData.length,
           }),
+          signal: controller.signal,
         }
       );
+
+      clearTimeout(timeoutId);
 
       const contentType =
         response.headers.get("content-type") || "";
@@ -396,7 +484,7 @@ const generateDocument =
 
       const filename = match
         ? match[1]
-        : `${docData.doc_type || "document"}.docx`;
+        : `${docData.doc_type || "document"}.pdf`;
 
       const blob = await response.blob();
 
@@ -425,72 +513,204 @@ const generateDocument =
 
     } catch (error) {
 
-      alert(
-        error.message ||
-        "Document generation failed"
-      );
+      clearTimeout(timeoutId);
+
+      if (error.name === "AbortError") {
+
+        alert(
+          "PDF generation timed out after 90s. " +
+          "The backend may be cold-starting, offline, or stuck. " +
+          "Check the backend terminal for errors and try again."
+        );
+
+      } else if (
+        typeof error.message === "string" &&
+        error.message.includes("Failed to fetch")
+      ) {
+
+        alert(
+          "Could not reach the backend at " +
+          API_BASE_URL +
+          ". Is it running? Check the terminal."
+        );
+
+      } else {
+
+        alert(
+          error.message ||
+          "PDF generation failed"
+        );
+      }
 
     } finally {
+
+      clearTimeout(timeoutId);
 
       setDocGenerating(false);
     }
   };
 
-  const speakText =
-    (text, messageKey = null) => {
-
-      if (!window.speechSynthesis) {
-
-        return;
-      }
-
-      window.speechSynthesis.cancel();
-
-      const speech =
-        new SpeechSynthesisUtterance(
-          text.replace(
-            /[`*_#>\[\]()]/g,
-            ""
-          )
-        );
-
-      speech.lang = "en-US";
-
-      speech.rate = 1;
-
-      speech.pitch = 1;
-
-      speech.onstart = () => {
-        setIsSpeaking(true);
-        setSpeakingMessageKey(messageKey);
-      };
-
-      speech.onend = () => {
-        setIsSpeaking(false);
-        setSpeakingMessageKey(null);
-      };
-
-      speech.onerror = () => {
-        setIsSpeaking(false);
-        setSpeakingMessageKey(null);
-      };
-
-      window.speechSynthesis.speak(
-        speech
-      );
-    };
-
   const stopSpeaking = () => {
 
-    if (window.speechSynthesis) {
+    const player = audioPlayerRef.current;
 
-      window.speechSynthesis.cancel();
+    if (player) {
+
+      try {
+        player.pause();
+        player.currentTime = 0;
+      } catch (error) {
+        console.debug("Audio stop failed", error);
+      }
+
+      audioPlayerRef.current = null;
+    }
+
+    const oldUrl = audioPlayerUrlRef.current;
+
+    if (oldUrl) {
+
+      URL.revokeObjectURL(oldUrl);
+
+      audioPlayerUrlRef.current = null;
     }
 
     setIsSpeaking(false);
 
     setSpeakingMessageKey(null);
   };
+
+  const speakText =
+    async (text, messageKey = null) => {
+
+      stopSpeaking();
+
+      const cleaned =
+        (text || "").trim();
+
+      if (!cleaned) return;
+
+      try {
+
+        const response = await fetch(
+          `${API_BASE_URL}/speak`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              text: cleaned,
+            }),
+          }
+        );
+
+        const contentType =
+          response.headers.get(
+            "content-type"
+          ) || "";
+
+        if (
+          !response.ok ||
+          contentType.includes("application/json")
+        ) {
+
+          const errJson = await response
+            .json()
+            .catch(() => ({}));
+
+          throw new Error(
+            errJson.error ||
+            "Speech synthesis failed"
+          );
+        }
+
+        const blob = await response.blob();
+
+        const url = URL.createObjectURL(blob);
+
+        audioPlayerUrlRef.current = url;
+
+        const audio = new Audio(url);
+
+        audioPlayerRef.current = audio;
+
+        audio.onplay = () => {
+          setIsSpeaking(true);
+          setSpeakingMessageKey(messageKey);
+        };
+
+        const cleanup = () => {
+
+          setIsSpeaking(false);
+          setSpeakingMessageKey(null);
+
+          if (audioPlayerUrlRef.current === url) {
+
+            URL.revokeObjectURL(url);
+            audioPlayerUrlRef.current = null;
+          }
+
+          if (audioPlayerRef.current === audio) {
+
+            audioPlayerRef.current = null;
+          }
+        };
+
+        audio.onended = cleanup;
+        audio.onerror = cleanup;
+
+        await audio.play();
+
+      } catch (error) {
+
+        setIsSpeaking(false);
+        setSpeakingMessageKey(null);
+
+        console.error(
+          "speakText error:",
+          error
+        );
+
+        if (window.speechSynthesis) {
+
+          const fallbackSpeech =
+            new SpeechSynthesisUtterance(
+              cleaned
+                .replace(/[`*_#>()]/g, "")
+                .replaceAll("[", "")
+                .replaceAll("]", "")
+            );
+
+          fallbackSpeech.lang = "en-US";
+          fallbackSpeech.rate = 1;
+          fallbackSpeech.pitch = 1;
+
+          fallbackSpeech.onstart = () => {
+            setIsSpeaking(true);
+            setSpeakingMessageKey(messageKey);
+          };
+
+          fallbackSpeech.onend = () => {
+            setIsSpeaking(false);
+            setSpeakingMessageKey(null);
+          };
+
+          fallbackSpeech.onerror = () => {
+            setIsSpeaking(false);
+            setSpeakingMessageKey(null);
+          };
+
+          window.speechSynthesis.speak(
+            fallbackSpeech
+          );
+
+          return;
+        }
+
+        alert("Text to speech failed. Please try again.");
+      }
+    };
 
   const toggleSpeakMessage =
     (text, messageKey) => {
@@ -526,12 +746,75 @@ const generateDocument =
 
   }, [message]);
 
+  useEffect(() => {
+
+    if (!docGenerating) {
+
+      if (docTimerRef.current) {
+
+        clearInterval(docTimerRef.current);
+
+        docTimerRef.current = null;
+      }
+
+      setDocElapsed(0);
+
+      return;
+    }
+
+    const startedAt = Date.now();
+
+    setDocElapsed(0);
+
+    docTimerRef.current = setInterval(() => {
+
+      setDocElapsed(
+        Math.floor(
+          (Date.now() - startedAt) / 1000
+        )
+      );
+    }, 250);
+
+    return () => {
+
+      if (docTimerRef.current) {
+
+        clearInterval(docTimerRef.current);
+
+        docTimerRef.current = null;
+      }
+    };
+  }, [docGenerating]);
+
   const releaseVoiceResources =
     useCallback(() => {
 
       if (window.speechSynthesis) {
 
         window.speechSynthesis.cancel();
+      }
+
+      const player = audioPlayerRef.current;
+
+      if (player) {
+
+        try {
+          player.pause();
+          player.currentTime = 0;
+        } catch (error) {
+          console.debug("Audio cleanup failed", error);
+        }
+
+        audioPlayerRef.current = null;
+      }
+
+      const oldUrl = audioPlayerUrlRef.current;
+
+      if (oldUrl) {
+
+        URL.revokeObjectURL(oldUrl);
+
+        audioPlayerUrlRef.current = null;
       }
 
       const recorder = mediaRecorderRef.current;
@@ -543,10 +826,25 @@ const generateDocument =
 
         try {
           recorder.stop();
-        } catch (e) {}
+        } catch (error) {
+          console.debug("Recorder cleanup failed", error);
+        }
       }
 
       mediaRecorderRef.current = null;
+
+      const recognition = speechRecognitionRef.current;
+
+      if (recognition) {
+
+        try {
+          recognition.abort();
+        } catch (error) {
+          console.debug("Recognition cleanup failed", error);
+        }
+
+        speechRecognitionRef.current = null;
+      }
 
       const stream = audioStreamRef.current;
 
@@ -675,7 +973,17 @@ const generateDocument =
 
     setLoading(true);
 
+    let timeoutId = null;
+
     try {
+
+      const controller =
+        new AbortController();
+
+      timeoutId = setTimeout(
+        () => controller.abort(),
+        90000
+      );
 
       const response = await fetch(
         `${API_BASE_URL}/chat`,
@@ -695,17 +1003,40 @@ const generateDocument =
             history:
               activeChat.messages || [],
           }),
+
+          signal: controller.signal,
         }
       );
 
+      if (!response.ok) {
+
+        throw new Error(
+          "Backend chat request failed"
+        );
+      }
+
       const data =
         await response.json();
+
+      const replyText =
+        (data.reply || "").trim();
+
+      if (
+        !replyText ||
+        replyText.startsWith("Backend Error:") ||
+        replyText.startsWith("Gemini API Error:")
+      ) {
+
+        throw new Error(
+          replyText || "Empty AI reply"
+        );
+      }
 
       const botMessage = {
 
         sender: "bot",
 
-        text: data.reply,
+        text: replyText,
       };
 
       const botMessageKey =
@@ -750,8 +1081,7 @@ const generateDocument =
 
         sender: "bot",
 
-        text:
-          "Error connecting to backend.",
+        text: createFallbackReply(),
       };
 
       const errorMessageKey =
@@ -789,9 +1119,16 @@ const generateDocument =
             return chat;
           })
       );
+    } finally {
+
+      if (timeoutId) {
+
+        clearTimeout(timeoutId);
+      }
+
+      setLoading(false);
     }
 
-    setLoading(false);
   };
 
   const sendMessage =
@@ -914,10 +1251,17 @@ const sendAudioForTranscription =
 
       const formData = new FormData();
 
+      const audioFilename =
+        blob.type.includes("mp4")
+          ? "voice.mp4"
+          : blob.type.includes("ogg")
+          ? "voice.ogg"
+          : "voice.webm";
+
       formData.append(
         "file",
         blob,
-        "voice.webm"
+        audioFilename
       );
 
       const response = await fetch(
@@ -929,6 +1273,14 @@ const sendAudioForTranscription =
       );
 
       const data = await response.json();
+
+      if (!response.ok || data.error) {
+
+        throw new Error(
+          data.error ||
+          "Voice transcription failed"
+        );
+      }
 
       const transcript =
         (data.transcript || "").trim();
@@ -959,7 +1311,98 @@ const sendAudioForTranscription =
     }
   };
 
+const getSpeechRecognition = () => {
+
+  return (
+    window.SpeechRecognition ||
+    window.webkitSpeechRecognition ||
+    null
+  );
+};
+
+const startBrowserSpeechRecognition =
+  () => {
+
+    const SpeechRecognition =
+      getSpeechRecognition();
+
+    if (!SpeechRecognition) {
+
+      return false;
+    }
+
+    const recognition =
+      new SpeechRecognition();
+
+    speechRecognitionRef.current =
+      recognition;
+
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+
+      setIsRecording(true);
+    };
+
+    recognition.onresult = async (event) => {
+
+      const transcript =
+        Array.from(event.results)
+          .map((result) => result[0]?.transcript || "")
+          .join(" ")
+          .trim();
+
+      if (transcript) {
+
+        await sendMessageText(
+          transcript,
+          { speak: true }
+        );
+
+      } else {
+
+        speakText(
+          "I could not understand that. Please try again."
+        );
+      }
+    };
+
+    recognition.onerror = () => {
+
+      setIsRecording(false);
+
+      speakText(
+        "Voice transcription failed. Please try again."
+      );
+    };
+
+    recognition.onend = () => {
+
+      if (
+        speechRecognitionRef.current ===
+        recognition
+      ) {
+
+        speechRecognitionRef.current = null;
+      }
+
+      setIsRecording(false);
+    };
+
+    recognition.start();
+
+    return true;
+  };
+
 const startVoiceInput = async () => {
+
+  if (startBrowserSpeechRecognition()) {
+
+    return;
+  }
 
   if (
     !navigator.mediaDevices ||
@@ -1056,6 +1499,24 @@ const startVoiceInput = async () => {
 
 const stopVoiceInput = () => {
 
+  const recognition =
+    speechRecognitionRef.current;
+
+  if (recognition) {
+
+    try {
+      recognition.stop();
+    } catch (error) {
+      console.debug("Recognition stop failed", error);
+    }
+
+    speechRecognitionRef.current = null;
+
+    setIsRecording(false);
+
+    return;
+  }
+
   const recorder = mediaRecorderRef.current;
 
   if (
@@ -1072,6 +1533,13 @@ const stopVoiceInput = () => {
     setIsRecording(false);
   }
 };
+const startContinuousVoice =
+  async () => {
+
+    setVoiceMode(true);
+
+    await startVoiceInput();
+  };
   return (
 
     <div className="app">
@@ -1398,8 +1866,10 @@ const stopVoiceInput = () => {
 
           {loading && (
 
-            <div className="bot-message">
-              Thinking...
+            <div className="message bot-message">
+              <div className="message-content thinking-indicator">
+                Thinking...
+              </div>
             </div>
 
           )}
@@ -1502,8 +1972,8 @@ const stopVoiceInput = () => {
       <button
         type="button"
         className="composer-icon-btn doc-btn"
-        title="Generate Document (.docx)"
-        aria-label="Generate Document"
+        title="Generate PDF"
+        aria-label="Generate PDF"
         onClick={() => setShowDocModal(true)}
       >
         <FilePlus size={20} />
@@ -1720,91 +2190,154 @@ const stopVoiceInput = () => {
   )
 }
 
-      {showDocModal && (
+      {showDocModal && (() => {
 
-        <div className="email-modal-overlay">
+        const estimateByLength = {
+          short:  6,
+          medium: 12,
+          long:   22,
+        };
 
-          <div className="email-modal">
+        const estimateSec =
+          estimateByLength[docData.length] || 12;
 
-            <h2>Generate Document</h2>
+        const progressPct = Math.min(
+          95,
+          Math.round(
+            (docElapsed / estimateSec) * 100
+          )
+        );
 
-            <textarea
-              placeholder="Describe the document you want (e.g. 'Cover letter for a junior React role at a fintech startup')"
-              value={docData.topic}
-              onChange={(e) =>
-                setDocData({
-                  ...docData,
-                  topic: e.target.value,
-                })
-              }
-            />
+        const overrun =
+          docElapsed > estimateSec;
 
-            <select
-              value={docData.doc_type}
-              onChange={(e) =>
-                setDocData({
-                  ...docData,
-                  doc_type: e.target.value,
-                })
-              }
-            >
-              <option value="letter">Letter</option>
-              <option value="cover letter">Cover Letter</option>
-              <option value="essay">Essay</option>
-              <option value="report">Report</option>
-              <option value="memo">Memo</option>
-              <option value="resume summary">Resume Summary</option>
-              <option value="proposal">Proposal</option>
-              <option value="document">Generic Document</option>
-            </select>
+        return (
 
-            <select
-              value={docData.length}
-              onChange={(e) =>
-                setDocData({
-                  ...docData,
-                  length: e.target.value,
-                })
-              }
-            >
-              <option value="short">Short (~200 words)</option>
-              <option value="medium">
-                Medium (~500 words) — default
-              </option>
-              <option value="long">Long (~1000 words)</option>
-            </select>
+          <div className="email-modal-overlay">
 
-            <div className="email-modal-buttons">
+            <div className="email-modal">
 
-              <button
-                className="cancel-btn"
-                onClick={() =>
-                  setShowDocModal(false)
+              <h2>Generate PDF</h2>
+
+              <textarea
+                placeholder="Describe the document you want (e.g. 'Cover letter for a junior React role at a fintech startup')"
+                value={docData.topic}
+                onChange={(e) =>
+                  setDocData({
+                    ...docData,
+                    topic: e.target.value,
+                  })
+                }
+                disabled={docGenerating}
+              />
+
+              <select
+                value={docData.doc_type}
+                onChange={(e) =>
+                  setDocData({
+                    ...docData,
+                    doc_type: e.target.value,
+                  })
                 }
                 disabled={docGenerating}
               >
-                Cancel
-              </button>
+                <option value="letter">Letter</option>
+                <option value="cover letter">Cover Letter</option>
+                <option value="essay">Essay</option>
+                <option value="report">Report</option>
+                <option value="memo">Memo</option>
+                <option value="resume summary">Resume Summary</option>
+                <option value="proposal">Proposal</option>
+                <option value="document">Generic Document</option>
+              </select>
 
-              <button
-                className="send-email-btn"
-                onClick={generateDocument}
-                disabled={
-                  docGenerating ||
-                  !docData.topic.trim()
+              <select
+                value={docData.length}
+                onChange={(e) =>
+                  setDocData({
+                    ...docData,
+                    length: e.target.value,
+                  })
                 }
+                disabled={docGenerating}
               >
-                {docGenerating
-                  ? "Generating..."
-                  : "Generate & Download"}
-              </button>
+                <option value="short">
+                  Short (~200 words, ~{estimateByLength.short}s)
+                </option>
+                <option value="medium">
+                  Medium (~500 words, ~{estimateByLength.medium}s) — default
+                </option>
+                <option value="long">
+                  Long (~1000 words, ~{estimateByLength.long}s)
+                </option>
+              </select>
+
+              {docGenerating && (
+
+                <div className="doc-progress">
+
+                  <div className="doc-progress-meta">
+
+                    <span>
+                      {overrun
+                        ? "Taking longer than usual..."
+                        : "Generating..."}
+                    </span>
+
+                    <span>
+                      {docElapsed}s
+                      {" / "}
+                      ~{estimateSec}s
+                    </span>
+
+                  </div>
+
+                  <div className="doc-progress-bar">
+
+                    <div
+                      className="doc-progress-bar-fill"
+                      style={{
+                        width: `${progressPct}%`,
+                      }}
+                    />
+
+                  </div>
+
+                </div>
+              )}
+
+              <div className="email-modal-buttons">
+
+                <button
+                  className="cancel-btn"
+                  onClick={() =>
+                    setShowDocModal(false)
+                  }
+                  disabled={docGenerating}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  className="send-email-btn"
+                  onClick={generateDocument}
+                  disabled={
+                    docGenerating ||
+                    !docData.topic.trim()
+                  }
+                >
+                  {docGenerating
+                    ? `Generating... ${docElapsed}s`
+                    : `Generate PDF (~${estimateSec}s)`}
+                </button>
+
+              </div>
 
             </div>
 
           </div>
-
-        </div>
-      )}
+        );
+      })()}
 
     </div>
   );

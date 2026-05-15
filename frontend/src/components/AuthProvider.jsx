@@ -7,9 +7,11 @@ import {
 
 import {
   createUserWithEmailAndPassword,
+  getRedirectResult,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   updateProfile
 } from "firebase/auth";
@@ -145,6 +147,29 @@ export function AuthProvider({
     useState(true);
 
   useEffect(() => {
+
+    getRedirectResult(auth)
+      .then((credential) => {
+
+        if (!credential?.user) {
+
+          return;
+        }
+
+        const currentUser =
+          saveLocalUser(
+            credential.user
+          );
+
+        setUser(currentUser);
+      })
+      .catch((firebaseError) => {
+
+        console.warn(
+          "Firebase redirect login failed",
+          firebaseError
+        );
+      });
 
     const unsubscribeAuth =
       onAuthStateChanged(
@@ -368,18 +393,46 @@ export function AuthProvider({
   const loginWithGoogle =
     async () => {
 
-      const credential =
-        await signInWithPopup(
-          auth,
-          provider
-        );
+      try {
 
-      const currentUser =
-        saveLocalUser(
-          credential.user
-        );
+        const credential =
+          await signInWithPopup(
+            auth,
+            provider
+          );
 
-      setUser(currentUser);
+        const currentUser =
+          saveLocalUser(
+            credential.user
+          );
+
+        setUser(currentUser);
+
+      } catch (firebaseError) {
+
+        const fallbackCodes = [
+          "auth/cancelled-popup-request",
+          "auth/popup-blocked",
+          "auth/popup-closed-by-user",
+          "auth/operation-not-supported-in-this-environment",
+        ];
+
+        if (
+          fallbackCodes.includes(
+            firebaseError?.code
+          )
+        ) {
+
+          await signInWithRedirect(
+            auth,
+            provider
+          );
+
+          return;
+        }
+
+        throw firebaseError;
+      }
     };
 
   const logout =

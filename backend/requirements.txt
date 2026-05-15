@@ -9,4 +9,5 @@ pypdf
 google-generativeai
 python-docx
 langchain-core
-langchain-google-genai
+langchain-groq
+groq
