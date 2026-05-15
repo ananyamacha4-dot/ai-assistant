@@ -69,17 +69,24 @@ app.add_middleware(
 # EMBEDDINGS
 # =========================
 
-embedding_model = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+embedding_model()= None
 
+def get_embedding_model():
+    global embedding_model
+
+    if embedding_model is None:
+        embedding_model = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+
+    return embedding_model
 # =========================
 # CHROMADB
 # =========================
 
 vectorstore = Chroma(
     persist_directory="./chroma_db",
-    embedding_function=embedding_model
+    embedding_function=get_embedding_model()
 )
 
 # =========================
