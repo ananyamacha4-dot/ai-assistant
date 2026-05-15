@@ -78,7 +78,7 @@ def get_gemini_model():
         raise ValueError("GEMINI_API_KEY is not set in environment variables.")
     
     genai.configure(api_key=GEMINI_API_KEY)
-    return genai.GenerativeModel('gemini-pro')
+    return genai.GenerativeModel('gemini-2.5-flash')
 
 def generate_ai_text(prompt):
 
@@ -524,6 +524,70 @@ Body: ...
             "message":
             str(e)
         }
+# =========================
+# TRANSCRIBE AUDIO (Whisper-style, powered by Gemini)
+# =========================
+
+@app.post("/transcribe")
+async def transcribe(
+    file: UploadFile = File(...)
+):
+
+    try:
+
+        if not GEMINI_API_KEY:
+
+            return {
+                "transcript": "",
+                "error":
+                    "GEMINI_API_KEY is not set "
+                    "in environment variables."
+            }
+
+        audio_bytes = await file.read()
+
+        mime_type = (
+            file.content_type
+            or "audio/webm"
+        )
+
+        genai.configure(
+            api_key=GEMINI_API_KEY
+        )
+
+        model = genai.GenerativeModel(
+            'gemini-2.5-flash'
+        )
+
+        response = model.generate_content(
+            [
+                (
+                    "Transcribe this audio to plain text. "
+                    "Return ONLY the spoken words, "
+                    "no commentary, no quotes, no extra punctuation."
+                ),
+                {
+                    "mime_type": mime_type,
+                    "data": audio_bytes,
+                },
+            ]
+        )
+
+        transcript = (
+            response.text or ""
+        ).strip()
+
+        return {
+            "transcript": transcript
+        }
+
+    except Exception as e:
+
+        return {
+            "transcript": "",
+            "error": str(e)
+        }
+
 # =========================
 # UPLOAD PDF
 # =========================

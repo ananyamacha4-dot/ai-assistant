@@ -1,8 +1,12 @@
 import {
   ArrowUp,
+  FileText,
   Mail,
   Mic,
-  Square
+  Paperclip,
+  Square,
+  Volume2,
+  X
 }
 from "lucide-react";
 import { useState, useEffect, useRef } from "react";
@@ -64,10 +68,30 @@ function Home() {
   const [isListening, setIsListening] =
     useState(false);
 
+  const [isRecording, setIsRecording] =
+    useState(false);
+
   const [isSpeaking, setIsSpeaking] =
     useState(false);
 
-  const recognitionRef = useRef(null);
+  const [speakingMessageKey, setSpeakingMessageKey] =
+    useState(null);
+
+  const mediaRecorderRef = useRef(null);
+
+  const audioChunksRef = useRef([]);
+
+  const audioStreamRef = useRef(null);
+
+  const pdfInputRef = useRef(null);
+
+  const textareaRef = useRef(null);
+
+  const [attachedPdf, setAttachedPdf] =
+    useState(null);
+
+  const [pdfUploading, setPdfUploading] =
+    useState(false);
 
   const {
     user,
@@ -300,7 +324,7 @@ const sendEmail =
   };
 
   const speakText =
-    (text) => {
+    (text, messageKey = null) => {
 
       if (!window.speechSynthesis) {
 
@@ -325,14 +349,17 @@ const sendEmail =
 
       speech.onstart = () => {
         setIsSpeaking(true);
+        setSpeakingMessageKey(messageKey);
       };
 
       speech.onend = () => {
         setIsSpeaking(false);
+        setSpeakingMessageKey(null);
       };
 
       speech.onerror = () => {
         setIsSpeaking(false);
+        setSpeakingMessageKey(null);
       };
 
       window.speechSynthesis.speak(
@@ -348,7 +375,43 @@ const sendEmail =
     }
 
     setIsSpeaking(false);
+
+    setSpeakingMessageKey(null);
   };
+
+  const toggleSpeakMessage =
+    (text, messageKey) => {
+
+      if (
+        isSpeaking &&
+        speakingMessageKey === messageKey
+      ) {
+
+        stopSpeaking();
+
+        return;
+      }
+
+      speakText(text, messageKey);
+    };
+
+  useEffect(() => {
+
+    const el = textareaRef.current;
+
+    if (!el) return;
+
+    el.style.height = "40px";
+
+    if (el.scrollHeight > 40) {
+
+      el.style.height = `${Math.min(
+        el.scrollHeight,
+        200
+      )}px`;
+    }
+
+  }, [message]);
 
   useEffect(() => {
 
@@ -357,6 +420,29 @@ const sendEmail =
       if (window.speechSynthesis) {
 
         window.speechSynthesis.cancel();
+      }
+
+      const recorder = mediaRecorderRef.current;
+
+      if (
+        recorder &&
+        recorder.state !== "inactive"
+      ) {
+
+        try {
+          recorder.stop();
+        } catch (e) {}
+      }
+
+      const stream = audioStreamRef.current;
+
+      if (stream) {
+
+        stream.getTracks().forEach(
+          (track) => track.stop()
+        );
+
+        audioStreamRef.current = null;
       }
     };
   }, []);
@@ -454,10 +540,16 @@ const sendEmail =
         text: data.reply,
       };
 
+      const botMessageKey =
+        `${currentChatId}-${
+          activeChat.messages.length + 1
+        }`;
+
       if (options.speak) {
 
         speakText(
-          botMessage.text
+          botMessage.text,
+          botMessageKey
         );
       }
 
@@ -494,10 +586,16 @@ const sendEmail =
           "Error connecting to backend.",
       };
 
+      const errorMessageKey =
+        `${currentChatId}-${
+          activeChat.messages.length + 1
+        }`;
+
       if (options.speak) {
 
         speakText(
-          errorMessage.text
+          errorMessage.text,
+          errorMessageKey
         );
       }
 
@@ -539,122 +637,272 @@ const uploadPDF =
   async (e) => {
 
     const file =
-      e.target.files[0];
+      e.target.files?.[0];
+
+    e.target.value = "";
 
     if (!file) return;
 
-    const formData =
-      new FormData();
+    setAttachedPdf({
+      name: file.name,
+      size: file.size,
+    });
 
-    formData.append(
-      "file",
-      file
-    );
+    setPdfUploading(true);
+
+    const formData = new FormData();
+
+    formData.append("file", file);
 
     try {
 
-      const response =
-        await fetch(
-
-          `${API_BASE_URL}/upload-pdf`,
-
-          {
-
-            method: "POST",
-
-            body: formData,
-          }
-        );
-
-      const data =
-        await response.json();
-
-      alert(
-        data.message
+      const response = await fetch(
+        `${API_BASE_URL}/upload-pdf`,
+        {
+          method: "POST",
+          body: formData,
+        }
       );
 
+      const data = await response.json();
+
+      if (!response.ok) {
+
+        throw new Error(
+          data.message ||
+          "PDF upload failed"
+        );
+      }
+
     } catch (error) {
+
+      setAttachedPdf(null);
 
       alert(
         "PDF upload failed"
       );
+
+    } finally {
+
+      setPdfUploading(false);
     }
   };
 
-const startVoiceInput = () => {
+const clearAttachedPdf = () => {
 
-  const SpeechRecognition =
-    window.SpeechRecognition ||
-    window.webkitSpeechRecognition;
+  setAttachedPdf(null);
+};
 
-  if (!SpeechRecognition) {
+const triggerPdfPicker = () => {
+
+  pdfInputRef.current?.click();
+};
+
+const pickAudioMimeType = () => {
+
+  if (typeof MediaRecorder === "undefined") {
+
+    return "";
+  }
+
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/mp4",
+  ];
+
+  for (const type of candidates) {
+
+    if (MediaRecorder.isTypeSupported(type)) {
+
+      return type;
+    }
+  }
+
+  return "";
+};
+
+const stopAudioStream = () => {
+
+  const stream = audioStreamRef.current;
+
+  if (stream) {
+
+    stream.getTracks().forEach(
+      (track) => track.stop()
+    );
+
+    audioStreamRef.current = null;
+  }
+};
+
+const sendAudioForTranscription =
+  async (blob) => {
+
+    setIsListening(true);
+
+    try {
+
+      const formData = new FormData();
+
+      formData.append(
+        "file",
+        blob,
+        "voice.webm"
+      );
+
+      const response = await fetch(
+        `${API_BASE_URL}/transcribe`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      const data = await response.json();
+
+      const transcript =
+        (data.transcript || "").trim();
+
+      if (!transcript) {
+
+        speakText(
+          "I could not understand that. Please try again."
+        );
+
+        return;
+      }
+
+      await sendMessageText(
+        transcript,
+        { speak: true }
+      );
+
+    } catch (error) {
+
+      speakText(
+        "Voice transcription failed. Please try again."
+      );
+
+    } finally {
+
+      setIsListening(false);
+    }
+  };
+
+const startVoiceInput = async () => {
+
+  if (
+    !navigator.mediaDevices ||
+    typeof MediaRecorder === "undefined"
+  ) {
 
     alert(
-      "Speech recognition not supported"
+      "Microphone recording is not supported in this browser."
     );
 
     return;
   }
 
-  const recognition =
-    new SpeechRecognition();
+  try {
 
-  recognitionRef.current =
-    recognition;
+    const stream =
+      await navigator.mediaDevices.getUserMedia(
+        { audio: true }
+      );
 
-  recognition.continuous = false;
+    audioStreamRef.current = stream;
 
-  recognition.interimResults = false;
+    const mimeType = pickAudioMimeType();
 
-  recognition.lang = "en-US";
+    const recorder = mimeType
+      ? new MediaRecorder(stream, { mimeType })
+      : new MediaRecorder(stream);
 
-  setIsListening(true);
+    mediaRecorderRef.current = recorder;
 
-  recognition.start();
+    audioChunksRef.current = [];
 
-  recognition.onresult =
-    async (event) => {
+    recorder.ondataavailable = (event) => {
 
-    const transcript =
-      event.results[0][0].transcript;
+      if (event.data && event.data.size > 0) {
 
-    setIsListening(false);
-
-    await sendMessageText(
-      transcript,
-      {
-        speak: true,
+        audioChunksRef.current.push(event.data);
       }
+    };
+
+    recorder.onstop = async () => {
+
+      stopAudioStream();
+
+      setIsRecording(false);
+
+      const chunks = audioChunksRef.current;
+
+      audioChunksRef.current = [];
+
+      if (chunks.length === 0) {
+
+        return;
+      }
+
+      const blob = new Blob(
+        chunks,
+        {
+          type:
+            recorder.mimeType ||
+            "audio/webm",
+        }
+      );
+
+      await sendAudioForTranscription(blob);
+    };
+
+    recorder.onerror = () => {
+
+      stopAudioStream();
+
+      setIsRecording(false);
+
+      speakText(
+        "Microphone error. Please try again."
+      );
+    };
+
+    setIsRecording(true);
+
+    recorder.start();
+
+  } catch (error) {
+
+    stopAudioStream();
+
+    setIsRecording(false);
+
+    alert(
+      "Could not access microphone. Please grant permission."
     );
-  };
+  }
+};
 
-  recognition.onspeechend = () => {
+const stopVoiceInput = () => {
 
-    recognition.stop();
-  };
+  const recorder = mediaRecorderRef.current;
 
-  recognition.onnomatch = () => {
+  if (
+    recorder &&
+    recorder.state !== "inactive"
+  ) {
 
-    setIsListening(false);
+    recorder.stop();
 
-    speakText(
-      "I could not understand that. Please try again."
-    );
-  };
+  } else {
 
-  recognition.onerror = () => {
+    stopAudioStream();
 
-    setIsListening(false);
-
-    speakText(
-      "I could not hear you. Please try again."
-    );
-  };
-
-  recognition.onend = () => {
-
-    setIsListening(false);
-  };
+    setIsRecording(false);
+  }
 };
   return (
 
@@ -774,19 +1022,6 @@ const startVoiceInput = () => {
           <h1>
             AI Assistant
           </h1>
-          <div className="top-actions">
-
-            <label className="upload-btn">
-              Upload PDF
-              <input
-                type="file"
-                accept=".pdf"
-                hidden
-                onChange={uploadPDF}
-              />
-            </label>
-
-          </div>
 
         </div>
 
@@ -945,6 +1180,50 @@ const startVoiceInput = () => {
 
                 </ReactMarkdown>
             </div>
+
+  {msg.sender === "bot" && (
+
+    <div className="message-actions">
+
+      <button
+        className={`msg-action-btn ${
+          speakingMessageKey ===
+          `${currentChatId}-${index}`
+            ? "active"
+            : ""
+        }`}
+        onClick={() =>
+          toggleSpeakMessage(
+            msg.text,
+            `${currentChatId}-${index}`
+          )
+        }
+        title={
+          speakingMessageKey ===
+          `${currentChatId}-${index}`
+            ? "Stop reading"
+            : "Read aloud"
+        }
+        aria-label={
+          speakingMessageKey ===
+          `${currentChatId}-${index}`
+            ? "Stop reading"
+            : "Read aloud"
+        }
+      >
+        {speakingMessageKey ===
+        `${currentChatId}-${index}` ? (
+          <Square
+            size={14}
+            fill="currentColor"
+          />
+        ) : (
+          <Volume2 size={16} />
+        )}
+      </button>
+
+    </div>
+  )}
               </div>
             )
           )}
@@ -964,74 +1243,155 @@ const startVoiceInput = () => {
         {/* INPUT */}
        <div className="input-container">
 
-  <input
-    type="text"
-    placeholder="Ask anything..."
-    value={message}
-    onChange={(e) => setMessage(e.target.value)}
-    onKeyDown={(e) => {
-      if (e.key === "Enter") {
-        sendMessage();
-      }
-    }}
-  />
+  {attachedPdf && (
 
-  <div className="input-actions">
+    <div className="attachment-row">
 
-    <button
-      className={`composer-icon-btn mic-btn ${
-        isSpeaking
-          ? "speaking"
-          : isListening
-          ? "listening"
-          : ""
-      }`}
-      onClick={
-        isSpeaking
-          ? stopSpeaking
-          : startVoiceInput
-      }
-      title={
-        isSpeaking
-          ? "Stop speaking"
-          : isListening
-          ? "Listening"
-          : "Voice input"
-      }
-      aria-label={
-        isSpeaking
-          ? "Stop speaking"
-          : isListening
-          ? "Listening"
-          : "Start voice input"
-      }
-    >
-      {isSpeaking ? (
-        <Square
-          size={18}
-          fill="currentColor"
-        />
-      ) : (
-        <Mic size={21} />
-      )}
-    </button>
+      <div className="attachment-chip">
 
-    <div
-      className="email-icon-wrapper"
-      title="Send Email"
-      onClick={() => setShowEmailModal(true)}
-    >
-      <Mail size={22} />
+        <span className="attachment-icon">
+          <FileText size={18} />
+        </span>
+
+        <span className="attachment-meta">
+
+          <span className="attachment-name">
+            {attachedPdf.name}
+          </span>
+
+          <span className="attachment-sub">
+            {pdfUploading
+              ? "Uploading..."
+              : "PDF attached"}
+          </span>
+
+        </span>
+
+        <button
+          className="attachment-remove"
+          onClick={clearAttachedPdf}
+          title="Remove attachment"
+          aria-label="Remove attachment"
+        >
+          <X size={14} />
+        </button>
+
+      </div>
+
     </div>
+  )}
+
+  <div className="input-row">
 
     <button
-      className="composer-icon-btn send-btn"
-      onClick={sendMessage}
-      title="Send message"
-      aria-label="Send message"
+      className="composer-icon-btn attach-btn"
+      onClick={triggerPdfPicker}
+      title="Attach PDF"
+      aria-label="Attach PDF"
+      disabled={pdfUploading}
     >
-      <ArrowUp size={24} strokeWidth={3} />
+      <Paperclip size={20} />
     </button>
+
+    <input
+      ref={pdfInputRef}
+      type="file"
+      accept=".pdf"
+      hidden
+      onChange={uploadPDF}
+    />
+
+    <textarea
+      ref={textareaRef}
+      className="composer-textarea"
+      placeholder="Ask anything..."
+      value={message}
+      rows={1}
+      onChange={(e) => setMessage(e.target.value)}
+      onKeyDown={(e) => {
+        if (
+          e.key === "Enter" &&
+          !e.shiftKey
+        ) {
+          e.preventDefault();
+          sendMessage();
+        }
+      }}
+    />
+
+    <div className="input-actions">
+
+      <button
+        type="button"
+        className="composer-icon-btn email-btn"
+        title="Send Email"
+        aria-label="Send Email"
+        onClick={() => setShowEmailModal(true)}
+      >
+        <Mail size={20} />
+      </button>
+
+      <button
+        className={`composer-icon-btn mic-btn ${
+          isSpeaking
+            ? "speaking"
+            : isRecording
+            ? "recording"
+            : isListening
+            ? "listening"
+            : ""
+        }`}
+        onClick={
+          isSpeaking
+            ? stopSpeaking
+            : isRecording
+            ? stopVoiceInput
+            : startVoiceInput
+        }
+        disabled={isListening}
+        title={
+          isSpeaking
+            ? "Stop speaking"
+            : isRecording
+            ? "Stop recording"
+            : isListening
+            ? "Transcribing..."
+            : "Voice input"
+        }
+        aria-label={
+          isSpeaking
+            ? "Stop speaking"
+            : isRecording
+            ? "Stop recording"
+            : isListening
+            ? "Transcribing"
+            : "Start voice input"
+        }
+      >
+        {isSpeaking || isRecording ? (
+          <Square
+            size={18}
+            fill="currentColor"
+          />
+        ) : (
+          <Mic size={20} />
+        )}
+      </button>
+
+      <button
+        className="composer-icon-btn send-btn"
+        onClick={sendMessage}
+        title="Send message"
+        aria-label="Send message"
+        disabled={
+          !message.trim() ||
+          loading
+        }
+      >
+        <ArrowUp size={20} strokeWidth={3} />
+      </button>
+
+    </div>
 
   </div>
 

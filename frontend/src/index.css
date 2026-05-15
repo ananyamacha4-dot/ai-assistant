@@ -384,6 +384,8 @@ label {
 
 .bot-message {
   justify-content: flex-start;
+  flex-direction: column;
+  align-items: flex-start;
 }
 
 .message-content {
@@ -443,6 +445,46 @@ label {
   color: #f4f4f4;
 }
 
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 2px;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+
+.bot-message:hover .message-actions,
+.message-actions:focus-within {
+  opacity: 1;
+}
+
+.msg-action-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: #b3b3b3;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.msg-action-btn:hover {
+  background: #2a2a2a;
+  color: #ececec;
+}
+
+.msg-action-btn.active {
+  background: #2563eb;
+  color: #ffffff;
+  opacity: 1;
+}
+
 .bot-message:not(.message) {
   width: 100%;
   max-width: 1080px;
@@ -455,99 +497,202 @@ label {
 
 .input-container {
   position: fixed;
-  bottom: 38px;
+  bottom: 32px;
   left: calc(344px + (100vw - 344px) / 2);
   transform: translateX(-50%);
   width: min(1038px, calc(100vw - 344px - 96px));
-  min-height: 76px;
-  background: #212121;
-  border: 1px solid #303030;
-  border-radius: 28px;
-  padding: 12px 12px 12px 22px;
+  background: #2f2f2f;
+  border: 1px solid #424242;
+  border-radius: 26px;
+  padding: 6px 10px;
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 4px;
   z-index: 100;
-  box-shadow: 0 12px 42px rgba(0, 0, 0, 0.38);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.22),
+    0 14px 38px rgba(0, 0, 0, 0.36);
+  transition: border-color 0.16s ease;
+  box-sizing: border-box;
 }
 
 .input-container:focus-within {
-  border-color: #4a4a4a;
+  border-color: #5a5a5a;
 }
 
-.input-container input {
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.attachment-row {
+  display: flex;
+  align-items: center;
+  padding: 4px 4px 0 4px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: #424242;
+  border: 1px solid #555;
+  border-radius: 14px;
+  padding: 6px 8px 6px 10px;
+  max-width: 360px;
+  color: var(--text);
+}
+
+.attachment-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #d33b3b;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.attachment-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.attachment-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f3f3f3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.attachment-sub {
+  font-size: 11px;
+  color: #b3b3b3;
+}
+
+.attachment-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: #d0d0d0;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+
+.attachment-remove:hover {
+  background: #555;
+  color: #fff;
+}
+
+.composer-textarea {
   flex: 1;
   min-width: 0;
   background: transparent;
   border: none;
   outline: none;
+  resize: none;
   color: var(--text);
   font-size: 16px;
-  line-height: 1.4;
-  padding: 10px 0;
+  line-height: 24px;
+  font-family: inherit;
+  padding: 8px 6px;
+  margin: 0;
+  height: 40px;
+  min-height: 40px;
+  max-height: 200px;
+  overflow-y: auto;
+  display: block;
+  box-sizing: border-box;
 }
 
-.input-container input::placeholder {
+.composer-textarea::placeholder {
   color: #a6a6a6;
 }
 
 .input-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   flex-shrink: 0;
 }
 
-.email-icon-wrapper,
 .composer-icon-btn {
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   cursor: pointer;
-  transition: background 0.16s ease, color 0.16s ease, transform 0.16s ease;
-}
-
-.email-icon-wrapper {
-  color: #ececec;
-  background: transparent;
-}
-
-.email-icon-wrapper:hover {
-  background: #303030;
-}
-
-.composer-icon-btn {
   border: none;
-  font-size: 0;
-  font-weight: 700;
-}
-
-.mic-btn {
   background: transparent;
   color: #ececec;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
 }
 
-.mic-btn:hover {
-  background: #303030;
+.composer-icon-btn:hover:not(:disabled) {
+  background: #404040;
+}
+
+.composer-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.attach-btn,
+.email-btn,
+.mic-btn {
+  color: #ececec;
 }
 
 .mic-btn.listening {
+  background: #555;
+  color: #ffffff;
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.mic-btn.recording {
   background: var(--danger);
   color: #ffffff;
   animation: pulse 1s infinite;
 }
 
-.send-btn {
-  background: var(--text);
-  color: var(--bg);
+.mic-btn.speaking {
+  background: #2563eb;
+  color: #ffffff;
 }
 
-.send-btn:hover {
-  background: #d9d9d9;
+.send-btn {
+  background: #ffffff;
+  color: #1a1a1a;
+}
+
+.send-btn:hover:not(:disabled) {
+  background: #e6e6e6;
+}
+
+.send-btn:disabled {
+  background: #4a4a4a;
+  color: #8a8a8a;
+  opacity: 1;
 }
 
 /* AUTH */
@@ -1011,12 +1156,6 @@ label {
     font-size: 20px;
   }
 
-  .upload-btn {
-    max-width: 110px;
-    padding: 0 12px;
-    white-space: nowrap;
-  }
-
   .chat-container {
     padding: 24px 0 128px;
   }
@@ -1034,16 +1173,18 @@ label {
   .input-container {
     left: calc(78px + (100vw - 78px) / 2);
     width: calc(100vw - 100px);
-    bottom: 18px;
-    min-height: 64px;
-    border-radius: 24px;
-    padding: 9px 9px 9px 16px;
+    bottom: 16px;
+    border-radius: 22px;
+    padding: 6px 8px;
   }
 
-  .email-icon-wrapper,
   .composer-icon-btn {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
+  }
+
+  .composer-textarea {
+    font-size: 15px;
   }
 }
 
