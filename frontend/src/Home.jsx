@@ -31,7 +31,82 @@ from "react-syntax-highlighter";
 import { oneDark }
 from "react-syntax-highlighter/dist/esm/styles/prism";
 
+import { GoogleGenerativeAI }
+from "@google/generative-ai";
+
 import "./index.css";
+
+const GEMINI_KEY =
+  import.meta.env.VITE_GEMINI_API_KEY || "";
+
+const genAI = GEMINI_KEY
+  ? new GoogleGenerativeAI(GEMINI_KEY)
+  : null;
+
+const GEMINI_MODELS = [
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+];
+
+async function callGeminiDirect(
+  message,
+  history
+) {
+
+  if (!genAI) {
+    throw new Error("No Gemini API key");
+  }
+
+  let conversationText = "";
+
+  for (const msg of (history || []).slice(-6)) {
+
+    if (msg.sender === "user") {
+      conversationText += `User: ${msg.text}\n`;
+    } else {
+      conversationText += `Assistant: ${msg.text}\n`;
+    }
+  }
+
+  const prompt =
+    `You are a helpful AI assistant.\n\n` +
+    `IMPORTANT RULES:\n` +
+    `1. If the user asks for code, ALWAYS use markdown code blocks with language specified.\n` +
+    `2. Use conversation history to remember context.\n\n` +
+    `Conversation History:\n${conversationText}\n` +
+    `Current User Question:\n${message}\n\n` +
+    `Answer naturally.`;
+
+  let lastError = null;
+
+  for (const modelName of GEMINI_MODELS) {
+
+    try {
+
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+      });
+
+      const result =
+        await model.generateContent(prompt);
+
+      const text =
+        result.response.text();
+
+      if (text && text.trim()) {
+        return text;
+      }
+
+    } catch (err) {
+      lastError = err;
+      continue;
+    }
+  }
+
+  throw lastError || new Error("All models failed");
+}
 
 function makeChatId() {
 
@@ -1027,80 +1102,57 @@ const generateDocument =
 
     try {
 
-      const maxRetries = 2;
-
       let replyText = "";
 
-      for (
-        let attempt = 0;
-        attempt <= maxRetries;
-        attempt++
-      ) {
+      try {
 
-        try {
+        const response = await fetch(
+          `${API_BASE_URL}/chat`,
+          {
 
-          const response = await fetch(
-            `${API_BASE_URL}/chat`,
-            {
+            method: "POST",
 
-              method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
 
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
+            body: JSON.stringify({
 
-              body: JSON.stringify({
+              message: currentMessage,
 
-                message: currentMessage,
+              history:
+                activeChat.messages || [],
+            }),
 
-                history:
-                  activeChat.messages || [],
-              }),
-
-              signal: AbortSignal.timeout(60000),
-            }
-          );
-
-          if (!response.ok) {
-
-            throw new Error(
-              "Backend chat request failed"
-            );
+            signal: AbortSignal.timeout(15000),
           }
+        );
 
-          const data =
-            await response.json();
-
-          replyText =
-            (data.reply || "").trim();
-
-          if (
-            !replyText ||
-            replyText.startsWith("Backend Error:") ||
-            replyText.startsWith("Gemini API Error:")
-          ) {
-
-            throw new Error(
-              replyText || "Empty AI reply"
-            );
-          }
-
-          break;
-
-        } catch (retryError) {
-
-          if (attempt < maxRetries) {
-
-            await new Promise(
-              (r) => setTimeout(r, 3000)
-            );
-
-            continue;
-          }
-
-          throw retryError;
+        if (!response.ok) {
+          throw new Error("Backend failed");
         }
+
+        const data =
+          await response.json();
+
+        replyText =
+          (data.reply || "").trim();
+
+        if (
+          !replyText ||
+          replyText.startsWith("Backend Error:") ||
+          replyText.startsWith("Gemini API Error:")
+        ) {
+          throw new Error("Bad backend reply");
+        }
+
+      } catch (backendError) {
+
+        replyText = await callGeminiDirect(
+          currentMessage,
+          activeChat.messages || []
+        );
       }
 
       const botMessage = {
