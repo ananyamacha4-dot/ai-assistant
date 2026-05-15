@@ -13,12 +13,8 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from langchain_chroma import Chroma
-from langchain_groq import ChatGroq
-from langchain_huggingface import HuggingFaceEmbeddings
-
 from dotenv import load_dotenv
-from langchain_experimental.tools import PythonREPLTool
+from groq import Groq
 
 from database import SessionLocal, engine
 from models import User, Base
@@ -40,6 +36,7 @@ from pypdf import PdfReader
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+PDF_CONTEXT_FILE = "pdf_context.txt"
 
 # =========================
 # CREATE DATABASE TABLES
@@ -59,89 +56,72 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://ai-assistant-gwco.vercel.app",
+        "https://ai-assistant-gwco-cxdzrjncv-ananyamacha4-dots-projects.vercel.app",
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # =========================
-# EMBEDDINGS
+# LIGHTWEIGHT AI HELPERS
 # =========================
 
-embedding_model = None
-vectorstore = None
-retriever = None
-llm = None
+groq_client = None
 
-def get_embedding_model():
+def get_groq_client():
 
-    global embedding_model
+    global groq_client
 
-    if embedding_model is None:
+    if groq_client is None:
 
-        embedding_model = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        groq_client = Groq(
+            api_key=GROQ_API_KEY
         )
 
-    return embedding_model
+    return groq_client
 
-# =========================
-# CHROMADB
-# =========================
+def generate_ai_text(prompt):
 
-def get_vectorstore():
+    if not GROQ_API_KEY:
 
-    global vectorstore
-
-    if vectorstore is None:
-
-        vectorstore = Chroma(
-            persist_directory="./chroma_db",
-            embedding_function=get_embedding_model()
+        return (
+            "Backend Error: GROQ_API_KEY is not set "
+            "in Render environment variables."
         )
 
-    return vectorstore
+    response = get_groq_client().chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        temperature=0.7,
+    )
 
-# =========================
-# RETRIEVER
-# =========================
+    return response.choices[0].message.content
 
-def get_retriever():
+def load_pdf_context():
 
-    global retriever
+    if not os.path.exists(PDF_CONTEXT_FILE):
 
-    if retriever is None:
+        return ""
 
-        retriever = get_vectorstore().as_retriever(
-            search_kwargs={"k": 2}
-        )
+    with open(
+        PDF_CONTEXT_FILE,
+        "r",
+        encoding="utf-8",
+        errors="ignore"
+    ) as file:
 
-    return retriever
-
-# =========================
-# PYTHON REPL
-# =========================
-
-python_repl = PythonREPLTool()
-
-# =========================
-# GROQ MODEL
-# =========================
-
-def get_llm():
-
-    global llm
-
-    if llm is None:
-
-        llm = ChatGroq(
-            groq_api_key=GROQ_API_KEY,
-            model_name="llama-3.1-8b-instant",
-            temperature=0.7
-        )
-
-    return llm
+        return file.read()[-5000:]
 
 # =========================
 # REQUEST MODELS
@@ -301,18 +281,10 @@ async def chat(req: ChatRequest):
                 )
 
         # =========================
-        # VECTOR SEARCH
+        # LIGHTWEIGHT PDF CONTEXT
         # =========================
 
-        docs = get_retriever().invoke(question)
-
-        # =========================
-        # CONTEXT EXTRACTION
-        # =========================
-
-        context = "\n".join(
-            [doc.page_content for doc in docs]
-        )
+        context = load_pdf_context()
 
         # =========================
         # FINAL PROMPT
@@ -352,12 +324,12 @@ Answer naturally.
         # GROQ RESPONSE
         # =========================
 
-        response = get_llm().invoke(
+        reply = generate_ai_text(
             final_prompt
         )
 
         return {
-            "reply": response.content
+            "reply": reply
         }
 
     except Exception as e:
@@ -470,11 +442,9 @@ Subject: ...
 Body: ...
 """
 
-        response = get_llm().invoke(
+        content = generate_ai_text(
             email_prompt
         )
-
-        content = response.content
 
         # =========================
         # SPLIT SUBJECT/BODY
@@ -629,11 +599,19 @@ async def upload_pdf(
             )
         ]
 
-        # STORE IN CHROMADB
+        # STORE LIGHTWEIGHT CONTEXT
 
-        get_vectorstore().add_texts(
-            chunks
-        )
+        with open(
+            PDF_CONTEXT_FILE,
+            "a",
+            encoding="utf-8"
+        ) as context_file:
+
+            context_file.write(
+                "\n\n".join(chunks[:20])
+            )
+
+            context_file.write("\n\n")
 
         return {
 
