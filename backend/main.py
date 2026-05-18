@@ -32,7 +32,7 @@ from langchain_core.tools import tool
 from groq import Groq
 
 from database import SessionLocal, engine
-from models import User, Base
+from models import User, Base, Chat, Message
 from auth import (
     hash_password,
     verify_password,
@@ -251,6 +251,26 @@ class SpeakRequest(BaseModel):
 
     voice: str = "Fritz-PlayAI"
 
+
+class CreateChatRequest(BaseModel):
+
+    email: str
+
+    title: str = "New Chat"
+
+
+class RenameChatRequest(BaseModel):
+
+    title: str
+
+
+class AppendMessageRequest(BaseModel):
+
+    sender: str
+
+    text: str
+
+
 # =========================
 # ROOT
 # =========================
@@ -345,6 +365,167 @@ def login(req: AuthRequest):
     return {
         "token": token
     }
+
+# =========================
+# CHAT HISTORY (Postgres-backed)
+# =========================
+
+def _normalize_email(email: str) -> str:
+
+    return (email or "").strip().lower()
+
+
+def _chat_to_dict(chat_row: Chat) -> dict:
+
+    return {
+        "id": chat_row.id,
+        "title": chat_row.title,
+        "created_at": chat_row.created_at.isoformat(),
+    }
+
+
+def _message_to_dict(msg_row: Message) -> dict:
+
+    return {
+        "id": msg_row.id,
+        "sender": msg_row.sender,
+        "text": msg_row.text,
+        "created_at": msg_row.created_at.isoformat(),
+    }
+
+
+@app.get("/chats")
+def list_chats(email: str):
+
+    clean_email = _normalize_email(email)
+
+    if not clean_email:
+
+        return {"chats": []}
+
+    db = SessionLocal()
+    try:
+        chats = (
+            db.query(Chat)
+            .filter(Chat.owner_email == clean_email)
+            .order_by(Chat.id.desc())
+            .all()
+        )
+        return {
+            "chats": [_chat_to_dict(c) for c in chats]
+        }
+    finally:
+        db.close()
+
+
+@app.post("/chats")
+def create_chat(req: CreateChatRequest):
+
+    clean_email = _normalize_email(req.email)
+
+    if not clean_email:
+
+        return {"error": "email required"}
+
+    db = SessionLocal()
+    try:
+        new_chat = Chat(
+            owner_email=clean_email,
+            title=req.title or "New Chat",
+        )
+        db.add(new_chat)
+        db.commit()
+        db.refresh(new_chat)
+        return {"chat": _chat_to_dict(new_chat)}
+    finally:
+        db.close()
+
+
+@app.patch("/chats/{chat_id}")
+def rename_chat(chat_id: int, req: RenameChatRequest):
+
+    db = SessionLocal()
+    try:
+        chat_row = db.query(Chat).filter(Chat.id == chat_id).first()
+        if not chat_row:
+            return {"error": "chat not found"}
+        chat_row.title = req.title or chat_row.title
+        db.commit()
+        db.refresh(chat_row)
+        return {"chat": _chat_to_dict(chat_row)}
+    finally:
+        db.close()
+
+
+@app.delete("/chats/{chat_id}")
+def delete_chat(chat_id: int):
+
+    db = SessionLocal()
+    try:
+        chat_row = db.query(Chat).filter(Chat.id == chat_id).first()
+        if not chat_row:
+            return {"error": "chat not found"}
+        db.delete(chat_row)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/chats/{chat_id}/messages")
+def list_messages(chat_id: int):
+
+    db = SessionLocal()
+    try:
+        msgs = (
+            db.query(Message)
+            .filter(Message.chat_id == chat_id)
+            .order_by(Message.id.asc())
+            .all()
+        )
+        return {
+            "messages": [_message_to_dict(m) for m in msgs]
+        }
+    finally:
+        db.close()
+
+
+@app.post("/chats/{chat_id}/messages")
+def append_message(chat_id: int, req: AppendMessageRequest):
+
+    if req.sender not in {"user", "bot"}:
+
+        return {"error": "sender must be 'user' or 'bot'"}
+
+    if not (req.text or "").strip():
+
+        return {"error": "text required"}
+
+    db = SessionLocal()
+    try:
+        chat_row = db.query(Chat).filter(Chat.id == chat_id).first()
+        if not chat_row:
+            return {"error": "chat not found"}
+
+        new_msg = Message(
+            chat_id=chat_id,
+            sender=req.sender,
+            text=req.text,
+        )
+        db.add(new_msg)
+
+        if (
+            req.sender == "user" and
+            chat_row.title in ("New Chat", "", None)
+        ):
+            chat_row.title = req.text.strip()[:25]
+
+        db.commit()
+        db.refresh(new_msg)
+        return {"message": _message_to_dict(new_msg)}
+    finally:
+        db.close()
+
 
 # =========================
 # CHAT

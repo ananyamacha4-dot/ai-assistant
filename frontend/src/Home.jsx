@@ -33,44 +33,21 @@ from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import "./index.css";
 
-function makeChatId() {
-
-  if (
-    typeof crypto !== "undefined" &&
-    typeof crypto.randomUUID === "function"
-  ) {
-
-    return crypto.randomUUID();
-  }
-
-  return (
-    `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-  );
-}
-
-function createStarterChat() {
-
-  return {
-    id: makeChatId(),
-    title: "New Chat",
-    messages: [],
-  };
-}
-
-function readJson(key, fallback) {
+function purgeLegacyLocalStorage() {
 
   try {
 
-    const value =
-      localStorage.getItem(key);
+    const stale = Object.keys(localStorage).filter(
+      (key) =>
+        key.startsWith("conversations:") ||
+        key.startsWith("currentChatId:")
+    );
 
-    return value
-      ? JSON.parse(value)
-      : fallback;
+    stale.forEach((key) => localStorage.removeItem(key));
 
   } catch (error) {
 
-    return fallback;
+    // ignore – privacy mode or quota issues
   }
 }
 
@@ -170,12 +147,7 @@ const [emailData, setEmailData] =
     useState("");
 
   const [conversations, setConversations] =
-    useState(() => {
-
-      return [
-        createStarterChat(),
-      ];
-    });
+    useState([]);
 
   const [currentChatId, setCurrentChatId] =
     useState(null);
@@ -185,18 +157,6 @@ const [emailData, setEmailData] =
 
   const messagesEndRef =
     useRef(null);
-
-  const userStorageId =
-    encodeURIComponent(
-      user?.email?.toLowerCase() ||
-      "guest"
-    );
-
-  const conversationsKey =
-    `conversations:${userStorageId}`;
-
-  const currentChatIdKey =
-    `currentChatId:${userStorageId}`;
 
   useEffect(() => {
 
@@ -235,105 +195,136 @@ const [emailData, setEmailData] =
 
   useEffect(() => {
 
-    if (!userEmail) return;
+    purgeLegacyLocalStorage();
 
-    const savedConversations =
-      readJson(
-        conversationsKey,
-        null
-      );
+  }, []);
 
-    const rawList =
-      Array.isArray(savedConversations) &&
-      savedConversations.length > 0
-        ? savedConversations
-        : [
-            createStarterChat(),
-          ];
+  useEffect(() => {
 
-    const seenIds = new Set();
+    if (!userEmail) {
 
-    const nextConversations = rawList.map(
-      (chat) => {
+      setConversations([]);
+      setCurrentChatId(null);
+      return;
+    }
 
-        const safeChat = {
-          id:
-            typeof chat?.id === "string" ||
-            typeof chat?.id === "number"
-              ? String(chat.id)
-              : makeChatId(),
-          title:
-            typeof chat?.title === "string"
-              ? chat.title
-              : "New Chat",
-          messages:
-            Array.isArray(chat?.messages)
-              ? chat.messages
-              : [],
-        };
+    let cancelled = false;
 
-        if (seenIds.has(safeChat.id)) {
+    (async () => {
 
-          safeChat.id = makeChatId();
+      try {
+
+        const response = await fetch(
+          `${API_BASE_URL}/chats?email=${encodeURIComponent(userEmail)}`
+        );
+
+        const data = await response.json();
+
+        if (cancelled) return;
+
+        const chats = Array.isArray(data?.chats)
+          ? data.chats.map((c) => ({
+              id: c.id,
+              title: c.title || "New Chat",
+              messages: [],
+            }))
+          : [];
+
+        if (chats.length > 0) {
+
+          setConversations(chats);
+          setCurrentChatId(chats[0].id);
+          return;
         }
 
-        seenIds.add(safeChat.id);
+        const createResponse = await fetch(
+          `${API_BASE_URL}/chats`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              email: userEmail,
+              title: "New Chat",
+            }),
+          }
+        );
 
-        return safeChat;
+        const createData = await createResponse.json();
+
+        if (cancelled) return;
+
+        if (createData?.chat) {
+
+          const starter = {
+            id: createData.chat.id,
+            title: createData.chat.title,
+            messages: [],
+          };
+
+          setConversations([starter]);
+          setCurrentChatId(starter.id);
+        }
+
+      } catch (error) {
+
+        console.error("Failed to load chats", error);
       }
-    );
+    })();
 
-    const savedCurrentChatId =
-      readJson(
-        currentChatIdKey,
-        null
-      );
+    return () => {
 
-    const savedIdString =
-      savedCurrentChatId == null
-        ? null
-        : String(savedCurrentChatId);
-
-    const nextCurrentChatId =
-      nextConversations.some(
-        (chat) =>
-          chat.id === savedIdString
-      )
-        ? savedIdString
-        : nextConversations[0].id;
-
-    setConversations(
-      nextConversations
-    );
-
-    setCurrentChatId(
-      nextCurrentChatId
-    );
+      cancelled = true;
+    };
 
   }, [userEmail]);
 
   useEffect(() => {
 
-    if (!userEmail || !currentChatId) {
+    if (!currentChatId) return;
 
-      return;
-    }
+    let cancelled = false;
 
-    localStorage.setItem(
-      conversationsKey,
-      JSON.stringify(conversations)
-    );
+    (async () => {
 
-    localStorage.setItem(
-      currentChatIdKey,
-      JSON.stringify(currentChatId)
-    );
+      try {
 
-  }, [
-    userEmail,
-    conversations,
-    currentChatId
-  ]);
+        const response = await fetch(
+          `${API_BASE_URL}/chats/${currentChatId}/messages`
+        );
+
+        const data = await response.json();
+
+        if (cancelled) return;
+
+        const msgs = Array.isArray(data?.messages)
+          ? data.messages.map((m) => ({
+              sender: m.sender,
+              text: m.text,
+            }))
+          : [];
+
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === currentChatId
+              ? { ...c, messages: msgs }
+              : c
+          )
+        );
+
+      } catch (error) {
+
+        console.error("Failed to load messages", error);
+      }
+    })();
+
+    return () => {
+
+      cancelled = true;
+    };
+
+  }, [currentChatId]);
 
   const currentChat =
     conversations.find(
@@ -341,7 +332,7 @@ const [emailData, setEmailData] =
         chat.id === currentChatId
     );
 
-  const createNewChat = () => {
+  const createNewChat = async () => {
 
     releaseVoiceResources();
 
@@ -362,20 +353,45 @@ const [emailData, setEmailData] =
       return;
     }
 
-    const newChat = {
+    if (!userEmail) return;
 
-      id: makeChatId(),
+    try {
 
-      title: "New Chat",
+      const response = await fetch(
+        `${API_BASE_URL}/chats`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: userEmail,
+            title: "New Chat",
+          }),
+        }
+      );
 
-      messages: [],
-    };
+      const data = await response.json();
 
-    setConversations(
-      (prev) => [newChat, ...prev]
-    );
+      if (data?.chat) {
 
-    setCurrentChatId(newChat.id);
+        const newChat = {
+          id: data.chat.id,
+          title: data.chat.title,
+          messages: [],
+        };
+
+        setConversations(
+          (prev) => [newChat, ...prev]
+        );
+
+        setCurrentChatId(newChat.id);
+      }
+
+    } catch (error) {
+
+      console.error("Failed to create chat", error);
+    }
   };
 
   const profileName =
@@ -947,6 +963,30 @@ const generateDocument =
 
   }, [currentChatId, releaseVoiceResources]);
 
+  const persistMessage =
+    (chatId, sender, text) => {
+
+      fetch(
+        `${API_BASE_URL}/chats/${chatId}/messages`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            sender,
+            text,
+          }),
+        }
+      ).catch((error) => {
+
+        console.error(
+          "Failed to persist message",
+          error
+        );
+      });
+    };
+
   const sendMessageText =
     async (
       text,
@@ -1004,6 +1044,12 @@ const generateDocument =
     );
 
     setMessage("");
+
+    persistMessage(
+      currentChatId,
+      "user",
+      currentMessage
+    );
 
     setLoading(true);
 
@@ -1109,6 +1155,12 @@ const generateDocument =
           })
       );
 
+      persistMessage(
+        currentChatId,
+        "bot",
+        replyText
+      );
+
     } catch (error) {
 
       const errorMessage = {
@@ -1153,6 +1205,13 @@ const generateDocument =
             return chat;
           })
       );
+
+      persistMessage(
+        currentChatId,
+        "bot",
+        errorMessage.text
+      );
+
     } finally {
 
       if (timeoutId) {
