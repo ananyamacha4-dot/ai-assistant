@@ -1099,11 +1099,15 @@ const generateDocument =
 
     if (!activeChat) return;
 
+    const pdfSnapshot = attachedPdf;
+
     const userMessage = {
 
       sender: "user",
 
       text: currentMessage,
+
+      pdf: pdfSnapshot,
     };
 
     const updatedConversations =
@@ -1137,6 +1141,8 @@ const generateDocument =
     );
 
     setMessage("");
+
+    setAttachedPdf(null);
 
     persistMessage(
       currentChatId,
@@ -1855,6 +1861,21 @@ const startContinuousVoice =
 >
 
   <div className="message-content">
+
+    {msg.sender === "user" && msg.pdf && (
+
+      <div className="message-attachment">
+
+        <span className="attachment-icon">
+          <FileText size={16} />
+        </span>
+
+        <span className="attachment-name">
+          {msg.pdf.name}
+        </span>
+
+      </div>
+    )}
 
     <ReactMarkdown
 

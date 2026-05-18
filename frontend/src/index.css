@@ -627,6 +627,33 @@ label {
   color: var(--text);
 }
 
+.message-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  max-width: 100%;
+  font-size: 13px;
+  color: #f3f3f3;
+}
+
+.message-attachment .attachment-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.message-attachment .attachment-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
 .attachment-icon {
   display: inline-flex;
   align-items: center;
