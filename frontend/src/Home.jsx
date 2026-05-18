@@ -31,7 +31,82 @@ from "react-syntax-highlighter";
 import { oneDark }
 from "react-syntax-highlighter/dist/esm/styles/prism";
 
+import { GoogleGenerativeAI }
+from "@google/generative-ai";
+
 import "./index.css";
+
+const GEMINI_KEY =
+  import.meta.env.VITE_GEMINI_API_KEY || "";
+
+const genAI = GEMINI_KEY
+  ? new GoogleGenerativeAI(GEMINI_KEY)
+  : null;
+
+const GEMINI_MODELS = [
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+];
+
+async function callGeminiDirect(
+  message,
+  history
+) {
+
+  if (!genAI) {
+    throw new Error("No Gemini API key");
+  }
+
+  let conversationText = "";
+
+  for (const msg of (history || []).slice(-6)) {
+
+    if (msg.sender === "user") {
+      conversationText += `User: ${msg.text}\n`;
+    } else {
+      conversationText += `Assistant: ${msg.text}\n`;
+    }
+  }
+
+  const prompt =
+    `You are a helpful AI assistant.\n\n` +
+    `IMPORTANT RULES:\n` +
+    `1. If the user asks for code, ALWAYS use markdown code blocks with language specified.\n` +
+    `2. Use conversation history to remember context.\n\n` +
+    `Conversation History:\n${conversationText}\n` +
+    `Current User Question:\n${message}\n\n` +
+    `Answer naturally.`;
+
+  let lastError = null;
+
+  for (const modelName of GEMINI_MODELS) {
+
+    try {
+
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+      });
+
+      const result =
+        await model.generateContent(prompt);
+
+      const text =
+        result.response.text();
+
+      if (text && text.trim()) {
+        return text;
+      }
+
+    } catch (err) {
+      lastError = err;
+      continue;
+    }
+  }
+
+  throw lastError || new Error("All models failed");
+}
 
 function purgeLegacyLocalStorage() {
 
@@ -51,12 +126,32 @@ function purgeLegacyLocalStorage() {
   }
 }
 
-function createFallbackReply() {
+function createFallbackReply(error) {
+
+  if (error?.name === "TimeoutError" ||
+      error?.name === "AbortError") {
+    return (
+      "The request timed out. The server may be waking up. " +
+      "Please try again."
+    );
+  }
+
+  if (error?.message?.includes("Failed to fetch") ||
+      error?.message?.includes("NetworkError") ||
+      error?.message?.includes("ERR_CONNECTION_REFUSED")) {
+    return (
+      "Cannot reach the AI server. It may be starting up " +
+      "(this can take up to 30 seconds on free hosting). " +
+      "Please try again."
+    );
+  }
+
+  if (error?.message) {
+    return error.message;
+  }
 
   return (
-    "The AI server is waking up (free tier cold start). " +
-    "This usually takes 30 to 60 seconds the first time. " +
-    "Please send your message again in a moment."
+    "Something went wrong. Please try again."
   );
 }
 
@@ -170,23 +265,21 @@ const [emailData, setEmailData] =
 
   useEffect(() => {
 
-    const controller = new AbortController();
+    const pingBackend = () => {
 
-    const warmupTimeout = setTimeout(
-      () => controller.abort(),
-      90000
+      fetch(`${API_BASE_URL}/health`, {
+        signal: AbortSignal.timeout(15000),
+      }).catch(() => {});
+    };
+
+    pingBackend();
+
+    const keepAlive = setInterval(
+      pingBackend,
+      4 * 60 * 1000
     );
 
-    fetch(`${API_BASE_URL}/health`, {
-      signal: controller.signal,
-    })
-      .catch(() => {})
-      .finally(() => clearTimeout(warmupTimeout));
-
-    return () => {
-      clearTimeout(warmupTimeout);
-      controller.abort();
-    };
+    return () => clearInterval(keepAlive);
 
   }, []);
 
@@ -1053,62 +1146,58 @@ const generateDocument =
 
     setLoading(true);
 
-    let timeoutId = null;
-
     try {
 
-      const controller =
-        new AbortController();
+      let replyText = "";
 
-      timeoutId = setTimeout(
-        () => controller.abort(),
-        90000
-      );
+      try {
 
-      const response = await fetch(
-        `${API_BASE_URL}/chat`,
-        {
+        const response = await fetch(
+          `${API_BASE_URL}/chat`,
+          {
 
-          method: "POST",
+            method: "POST",
 
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
 
-          body: JSON.stringify({
+            body: JSON.stringify({
 
-            message: currentMessage,
+              message: currentMessage,
 
-            history:
-              activeChat.messages || [],
-          }),
+              history:
+                activeChat.messages || [],
+            }),
 
-          signal: controller.signal,
-        }
-      );
-
-      if (!response.ok) {
-
-        throw new Error(
-          "Backend chat request failed"
+            signal: AbortSignal.timeout(15000),
+          }
         );
-      }
 
-      const data =
-        await response.json();
+        if (!response.ok) {
+          throw new Error("Backend failed");
+        }
 
-      const replyText =
-        (data.reply || "").trim();
+        const data =
+          await response.json();
 
-      if (
-        !replyText ||
-        replyText.startsWith("Backend Error:") ||
-        replyText.startsWith("Gemini API Error:")
-      ) {
+        replyText =
+          (data.reply || "").trim();
 
-        throw new Error(
-          replyText || "Empty AI reply"
+        if (
+          !replyText ||
+          replyText.startsWith("Backend Error:") ||
+          replyText.startsWith("Gemini API Error:")
+        ) {
+          throw new Error("Bad backend reply");
+        }
+
+      } catch (backendError) {
+
+        replyText = await callGeminiDirect(
+          currentMessage,
+          activeChat.messages || []
         );
       }
 
@@ -1167,7 +1256,7 @@ const generateDocument =
 
         sender: "bot",
 
-        text: createFallbackReply(),
+        text: createFallbackReply(error),
       };
 
       const errorMessageKey =
@@ -1213,11 +1302,6 @@ const generateDocument =
       );
 
     } finally {
-
-      if (timeoutId) {
-
-        clearTimeout(timeoutId);
-      }
 
       setLoading(false);
     }
